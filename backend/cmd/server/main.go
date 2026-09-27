@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,6 +35,10 @@ import (
 var version = "dev"
 
 func main() {
+	// `server healthcheck` lets container runtimes probe the app without curl.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck())
+	}
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
 		os.Exit(1)
@@ -144,6 +149,30 @@ func run() error {
 	wg.Wait() // workers release or finish their jobs
 	slog.Info("stopped")
 	return err
+}
+
+func healthcheck() int {
+	// Always probe the loopback interface; only the port comes from HTTP_ADDR.
+	port := "8080"
+	if _, p, err := net.SplitHostPort(os.Getenv("HTTP_ADDR")); err == nil && p != "" {
+		port = p
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	url := "http://" + net.JoinHostPort("127.0.0.1", port) + "/healthz"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil) //nolint:gosec // G704: see below
+	if err != nil {
+		return 1
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // G704: loopback-only URL, port from operator config
+	if err != nil {
+		return 1
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }
 
 func newServer(addr string, h http.Handler) *http.Server {

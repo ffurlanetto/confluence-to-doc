@@ -40,7 +40,7 @@ func pngBytes(t *testing.T, w, h int) []byte {
 func newFixture(t *testing.T) (*fake.Server, *confluence.Client) {
 	t.Helper()
 	f := fake.New("tok")
-	f.AddPage(fake.Page{ID: "1", Title: "Root", Body: `<h1>Intro</h1><p>See <a href="/pages/viewpage.action?pageId=4">grandchild</a> and <a href="/display/X/Other">other</a></p><img src="/download/attachments/1/wide.png" alt="wide"><script>alert(1)</script>`})
+	f.AddPage(fake.Page{ID: "1", Title: "Root", Body: `<h1>Intro</h1><p>See <a href="/pages/viewpage.action?pageId=4">grandchild</a> and <a href="/display/X/Other">other</a></p><img src="/download/attachments/1/wide.png" alt="wide"><script>alert(1)</script><table><tr><td>x</td></tr></table>`})
 	f.AddPage(fake.Page{ID: "2", Title: "Child A", ParentID: "1", Body: `<h2>Section</h2><p onclick="x()">A</p><img src="/download/attachments/missing.png" alt="gone">`})
 	f.AddPage(fake.Page{ID: "3", Title: "Child B", ParentID: "1", Body: `<p>B &amp; co</p>`})
 	f.AddPage(fake.Page{ID: "4", Title: "Grandchild <x>", ParentID: "2", Body: `<h5>Deep</h5>`})
@@ -130,6 +130,7 @@ func TestRenderHTML(t *testing.T) {
 		`width="640" height="100"`,    // and fitted to the page
 		`[gone]`,                      // missing image replaced by alt text
 		`Table des matières`,
+		`border="1"`, // tables get visible borders
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(doc, s) {

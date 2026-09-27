@@ -107,6 +107,7 @@ body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 10.5pt; }
 table { border-collapse: collapse; }
 th, td { border: 1px solid #999999; padding: 3px; vertical-align: top; }
 th { background-color: #f0f0f0; }
+h1, h2, h3, h4, h5, h6 { font-family: "Liberation Sans", Arial, sans-serif; }
 pre, code { font-family: "Liberation Mono", monospace; font-size: 9pt; }
 pre { background-color: #f5f5f5; }
 `
@@ -179,6 +180,14 @@ func (r *renderer) transformNode(n *nethtml.Node, shift int) {
 		r.inlineImage(n)
 	case atom.A:
 		r.rewriteLink(n)
+	case atom.Table:
+		// LibreOffice ignores CSS borders on cells but honours these attributes.
+		if v, _ := getAttr(n, "border"); v == "" || v == "0" {
+			setAttr(n, "border", "1")
+		}
+		if v, _ := getAttr(n, "cellpadding"); v == "" {
+			setAttr(n, "cellpadding", "4")
+		}
 	}
 }
 

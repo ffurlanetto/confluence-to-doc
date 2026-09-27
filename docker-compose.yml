@@ -1,0 +1,61 @@
+# Local stack: PostgreSQL + the application + development mocks (fake
+# Confluence and fake OpenID Connect provider). Start with `make up`, then open
+# http://localhost:8080 and use the PAT "dev-pat" in the preferences.
+#
+# The mocks share the app's network namespace so that "localhost:8091" (OIDC
+# issuer) and "localhost:8090" (Confluence) resolve identically for the
+# browser and for the backend, as they would with real, public services.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: c2d
+      POSTGRES_PASSWORD: c2d
+      POSTGRES_DB: c2d
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U c2d"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://c2d:c2d@db:5432/c2d?sslmode=disable
+      PUBLIC_URL: http://localhost:8080
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://localhost:8091}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-confluence-to-doc}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-dev-secret}
+      CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-http://localhost:8090}
+      # Development-only key. Generate your own with: openssl rand -base64 32
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGV2LW9ubHktZGV2LW9ubHktZGV2LW9ubHktZGV2LTA=}
+      LOG_FORMAT: text
+    ports:
+      - "8080:8080" # application
+      - "9090:9090" # Prometheus metrics
+      - "8090:8090" # fake Confluence (devmocks)
+      - "8091:8091" # fake OIDC provider (devmocks)
+    volumes:
+      - exports:/data
+
+  devmocks:
+    build:
+      context: .
+      target: devmocks
+    network_mode: "service:app"
+    depends_on:
+      - app
+
+volumes:
+  db-data:
+  exports:

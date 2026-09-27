@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make check)",
+      "Bash(make lint)",
+      "Bash(make fmt)",
+      "Bash(make test)",
+      "Bash(make test-backend)",
+      "Bash(make test-backend-short)",
+      "Bash(make test-frontend)",
+      "Bash(make build)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(go build:*)",
+      "Bash(golangci-lint run:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)"
+    ],
+    "deny": ["Read(./.env)"]
+  }
+}

@@ -2,6 +2,8 @@ module github.com/ffurlanetto/confluence-to-doc/backend
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-chi/chi/v5 v5.3.2
