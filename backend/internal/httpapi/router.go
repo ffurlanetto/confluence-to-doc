@@ -52,6 +52,9 @@ type Deps struct {
 	StaticDir string
 	Retention time.Duration
 	MaxPages  int
+	// DocumentTemplate is the company Word template file name, empty when
+	// documents use the built-in styling.
+	DocumentTemplate string
 }
 
 func NewRouter(d Deps) http.Handler {

@@ -14,22 +14,21 @@ export function ExportsPage() {
   return (
     <section>
       <div className="section-header">
-        <h1>Mes exports</h1>
+        <h1>My exports</h1>
         <Link className="button primary" to="/new">
-          Nouvel export
+          New export
         </Link>
       </div>
       <p className="muted">
-        Les documents générés restent disponibles au téléchargement pendant {prefs.data?.retentionHours ?? 48}{' '}
-        heures.
+        Generated documents remain available for download for {prefs.data?.retentionHours ?? 48} hours.
       </p>
 
-      {exports.isLoading && <p>Chargement…</p>}
-      {exports.isError && <p className="error">Impossible de charger vos exports.</p>}
+      {exports.isLoading && <p>Loading…</p>}
+      {exports.isError && <p className="error">Unable to load your exports.</p>}
       {exports.data?.length === 0 && (
         <div className="empty">
-          <p>Vous n’avez encore lancé aucun export.</p>
-          <Link to="/new">Exporter une page Confluence</Link>
+          <p>You have not started any export yet.</p>
+          <Link to="/new">Export a Confluence page</Link>
         </div>
       )}
       {exports.data && exports.data.length > 0 && (
@@ -38,9 +37,9 @@ export function ExportsPage() {
             <tr>
               <th scope="col">Page</th>
               <th scope="col">Format</th>
-              <th scope="col">Statut</th>
-              <th scope="col">Demandé le</th>
-              <th scope="col">Expire dans</th>
+              <th scope="col">Status</th>
+              <th scope="col">Requested on</th>
+              <th scope="col">Expires in</th>
               <th scope="col">
                 <span className="visually-hidden">Actions</span>
               </th>
@@ -63,7 +62,7 @@ function ExportRow({ exp, onDelete, deleting }: { exp: Export; onDelete: () => v
     <tr>
       <td>
         <strong>{exp.title}</strong>
-        <div className="muted small">{exp.includeChildren ? 'Avec les sous-pages' : 'Page seule'}</div>
+        <div className="muted small">{exp.includeChildren ? 'With child pages' : 'Single page'}</div>
         {exp.error && <div className="error small">{exp.error}</div>}
       </td>
       <td>{exp.format.toUpperCase()}</td>
@@ -76,7 +75,7 @@ function ExportRow({ exp, onDelete, deleting }: { exp: Export; onDelete: () => v
         <div className="actions">
           {ready && (
             <a className="button primary" href={api.downloadUrl(exp.id)} download>
-              Télécharger <span className="muted small">({formatBytes(exp.fileSize)})</span>
+              Download <span className="muted small">({formatBytes(exp.fileSize)})</span>
             </a>
           )}
           <button
@@ -84,9 +83,9 @@ function ExportRow({ exp, onDelete, deleting }: { exp: Export; onDelete: () => v
             className="button"
             onClick={onDelete}
             disabled={deleting}
-            aria-label={`Supprimer l’export ${exp.title}`}
+            aria-label={`Delete export ${exp.title}`}
           >
-            {exp.status === 'queued' || exp.status === 'running' ? 'Annuler' : 'Supprimer'}
+            {exp.status === 'queued' || exp.status === 'running' ? 'Cancel' : 'Delete'}
           </button>
         </div>
       </td>

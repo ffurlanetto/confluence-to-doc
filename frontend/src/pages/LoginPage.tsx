@@ -6,9 +6,9 @@ export function LoginPage() {
     <main className="login">
       <div className="card">
         <h1>Confluence Export</h1>
-        <p>Exportez une page Confluence et toute son arborescence au format Word ou PDF.</p>
+        <p>Export a Confluence page and its whole tree to Word or PDF.</p>
         <a className="button primary" href={loginUrl(returnTo)}>
-          Se connecter
+          Sign in
         </a>
       </div>
     </main>

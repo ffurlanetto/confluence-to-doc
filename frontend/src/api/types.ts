@@ -17,6 +17,8 @@ export interface Preferences {
   defaultFormat: ExportFormat;
   retentionHours: number;
   maxPages: number;
+  /** Company Word template applied to generated documents; absent when the built-in styling is used. */
+  documentTemplate?: string;
 }
 
 export interface PageSummary {

@@ -24,6 +24,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/config"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
@@ -75,11 +76,26 @@ func run() error {
 	}
 	accounts := account.NewService(db, sealer, cfg.ConfluenceBaseURL, cfg.ConfluenceTimeout)
 
+	// The company Word template is validated at startup: a broken template
+	// must stop the process, not every export.
+	var template *docx.Template
+	if path := cfg.Export.WordTemplatePath; path != "" {
+		template, err = docx.LoadTemplate(path)
+		if err != nil {
+			return err
+		}
+		slog.Info("document template: company Word template", "file", template.Name(),
+			"default_paragraph_style", template.DefaultParagraphStyle(), "styles", len(template.Styles()))
+	} else {
+		slog.Info("document template: built-in styling")
+	}
+
 	var wg sync.WaitGroup
 	var notify func()
 
 	if cfg.Role.RunsWorker() {
-		pool := export.NewPool(db, accounts, converter.LibreOffice{Binary: cfg.Export.SofficePath}, blobs, export.WorkerConfig{
+		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Template: template}
+		pool := export.NewPool(db, accounts, conv, blobs, export.WorkerConfig{
 			Concurrency:       cfg.Export.WorkerConcurrency,
 			PollInterval:      cfg.Export.PollInterval,
 			JobTimeout:        cfg.Export.JobTimeout,
@@ -88,6 +104,7 @@ func run() error {
 			MaxPages:          cfg.Export.MaxPages,
 			MaxImageBytes:     cfg.Export.MaxImageBytes,
 			ConfluenceWorkers: cfg.Export.ConfluenceWorkers,
+			UseTemplateStyles: template != nil,
 			ShutdownGrace:     20 * time.Second,
 		})
 		notify = pool.Notify
@@ -111,14 +128,15 @@ func run() error {
 			return err
 		}
 		router := httpapi.NewRouter(httpapi.Deps{
-			Auth:      authenticator,
-			Accounts:  accounts,
-			Exports:   export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
-			Ready:     db.Ping,
-			PublicURL: cfg.PublicURL,
-			StaticDir: cfg.StaticDir,
-			Retention: cfg.Export.Retention,
-			MaxPages:  cfg.Export.MaxPages,
+			Auth:             authenticator,
+			Accounts:         accounts,
+			Exports:          export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
+			Ready:            db.Ping,
+			PublicURL:        cfg.PublicURL,
+			StaticDir:        cfg.StaticDir,
+			Retention:        cfg.Export.Retention,
+			MaxPages:         cfg.Export.MaxPages,
+			DocumentTemplate: templateName(template),
 		})
 		servers = append(servers, newServer(cfg.HTTPAddr, router))
 	}
@@ -177,6 +195,14 @@ func healthcheck() int {
 
 // newBlobStore is the storage feature flag: S3 when a bucket is configured,
 // local disk otherwise.
+// templateName is the template file name shown in the API, empty when none.
+func templateName(t *docx.Template) string {
+	if t == nil {
+		return ""
+	}
+	return t.Name()
+}
+
 func newBlobStore(ctx context.Context, cfg *config.Config) (storage.BlobStore, error) {
 	if !cfg.S3.Enabled() {
 		slog.Info("document storage: local disk", "dir", cfg.Export.StorageDir)

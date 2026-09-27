@@ -42,32 +42,32 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 func handleError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "Ressource introuvable.")
+		writeError(w, r, http.StatusNotFound, "not_found", "Resource not found.")
 	case errors.Is(err, domain.ErrPATMissing):
-		writeError(w, r, http.StatusConflict, "pat_missing", "Configurez votre jeton d'accès Confluence (PAT) dans vos préférences.")
+		writeError(w, r, http.StatusConflict, "pat_missing", "Set your Confluence personal access token (PAT) in your preferences.")
 	case errors.Is(err, account.ErrInvalidPAT), errors.Is(err, confluence.ErrUnauthorized):
-		writeError(w, r, http.StatusConflict, "pat_invalid", "Le jeton d'accès Confluence est invalide ou expiré.")
+		writeError(w, r, http.StatusConflict, "pat_invalid", "The Confluence personal access token is invalid or expired.")
 	case errors.Is(err, confluence.ErrForbidden):
-		writeError(w, r, http.StatusForbidden, "confluence_forbidden", "Accès refusé par Confluence.")
+		writeError(w, r, http.StatusForbidden, "confluence_forbidden", "Confluence denied access.")
 	case errors.Is(err, confluence.ErrNotFound):
-		writeError(w, r, http.StatusNotFound, "page_not_found", "Page Confluence introuvable.")
+		writeError(w, r, http.StatusNotFound, "page_not_found", "Confluence page not found.")
 	case errors.Is(err, domain.ErrTooManyActive):
-		writeError(w, r, http.StatusTooManyRequests, "too_many_exports", "Vous avez déjà trop d'exports en cours. Réessayez quand ils seront terminés.")
+		writeError(w, r, http.StatusTooManyRequests, "too_many_exports", "You already have too many exports in progress. Try again once they finish.")
 	case errors.Is(err, domain.ErrExportNotReady):
-		writeError(w, r, http.StatusConflict, "not_ready", "Le document n'est pas encore prêt.")
+		writeError(w, r, http.StatusConflict, "not_ready", "The document is not ready yet.")
 	case errors.Is(err, domain.ErrExportExpired):
-		writeError(w, r, http.StatusGone, "expired", "Le document a expiré et n'est plus disponible.")
+		writeError(w, r, http.StatusGone, "expired", "The document has expired and is no longer available.")
 	case errors.Is(err, domain.ErrInvalidFormat):
-		writeError(w, r, http.StatusBadRequest, "invalid_format", "Format invalide (pdf ou docx attendu).")
+		writeError(w, r, http.StatusBadRequest, "invalid_format", "Invalid format (expected pdf or docx).")
 	case errors.Is(err, domain.ErrInvalidPageID):
-		writeError(w, r, http.StatusBadRequest, "invalid_page", "Identifiant de page invalide.")
+		writeError(w, r, http.StatusBadRequest, "invalid_page", "Invalid page identifier.")
 	default:
 		var se *confluence.StatusError
 		if errors.As(err, &se) {
-			writeError(w, r, http.StatusBadGateway, "confluence_error", "Confluence a renvoyé une erreur.")
+			writeError(w, r, http.StatusBadGateway, "confluence_error", "Confluence returned an error.")
 			return
 		}
 		slog.ErrorContext(r.Context(), "request failed", "err", err, "request_id", middleware.GetReqID(r.Context()))
-		writeError(w, r, http.StatusInternalServerError, "internal", "Erreur interne.")
+		writeError(w, r, http.StatusInternalServerError, "internal", "Internal error.")
 	}
 }

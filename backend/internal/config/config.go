@@ -98,6 +98,9 @@ type ExportConfig struct {
 	JanitorInterval   time.Duration
 	SofficePath       string
 	ConfluenceWorkers int
+	// WordTemplatePath points at a company Word template (.docx/.dotx)
+	// applied to every generated document. Empty means default styling.
+	WordTemplatePath string
 }
 
 // Load reads the configuration from the environment.
@@ -135,6 +138,7 @@ func load(getenv func(string) string) (*Config, error) {
 			JanitorInterval:   e.duration("EXPORT_JANITOR_INTERVAL", 10*time.Minute),
 			SofficePath:       e.str("SOFFICE_PATH", "soffice"),
 			ConfluenceWorkers: e.int("CONFLUENCE_FETCH_CONCURRENCY", 4),
+			WordTemplatePath:  e.str("WORD_TEMPLATE_PATH", ""),
 		},
 	}
 	cfg.S3 = S3Config{

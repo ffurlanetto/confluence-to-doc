@@ -43,23 +43,23 @@ func serve(addr string, h http.Handler, what string) {
 
 func seed(f *fake.Server) {
 	f.AddAttachment("100/diagram.png", demoImage())
-	f.AddPage(fake.Page{ID: "100", Title: "Documentation produit", SpaceKey: "DOC", Body: `
-<p>Bienvenue dans la documentation. Cette page racine contient une <strong>image</strong>, un tableau et des sous-pages.</p>
-<p><img src="/download/attachments/100/diagram.png" alt="Diagramme"></p>
+	f.AddPage(fake.Page{ID: "100", Title: "Product documentation", SpaceKey: "DOC", Body: `
+<p>Welcome to the documentation. This root page contains an <strong>image</strong>, a table and child pages.</p>
+<p><img src="/download/attachments/100/diagram.png" alt="Diagram"></p>
 <table><tr><th>Version</th><th>Date</th></tr><tr><td>1.0</td><td>2026-01-15</td></tr><tr><td>2.0</td><td>2026-06-01</td></tr></table>
-<p>Voir aussi le <a href="/pages/viewpage.action?pageId=121">guide de déploiement</a>.</p>`})
-	f.AddPage(fake.Page{ID: "110", ParentID: "100", Title: "Guide utilisateur", SpaceKey: "DOC", Body: `
-<h1>Prise en main</h1><p>Connectez-vous puis choisissez une page.</p>
-<h2>Raccourcis</h2><ul><li>Ctrl+K : recherche</li><li>Ctrl+E : export</li></ul>`})
-	f.AddPage(fake.Page{ID: "111", ParentID: "110", Title: "FAQ", SpaceKey: "DOC", Body: `<p><em>Q :</em> Combien de temps les exports restent-ils disponibles ? <em>R :</em> 48 heures.</p>`})
-	f.AddPage(fake.Page{ID: "120", ParentID: "100", Title: "Guide d'administration", SpaceKey: "DOC", Body: `<p>Configuration du serveur.</p><pre>APP_ROLE=worker</pre>`})
-	f.AddPage(fake.Page{ID: "121", ParentID: "120", Title: "Déploiement", SpaceKey: "DOC", Body: `<p>Utilisez l'image Docker fournie.</p>`})
-	f.AddPage(fake.Page{ID: "122", ParentID: "120", Title: "Supervision", SpaceKey: "DOC", Body: `<p>Métriques Prometheus sur <code>:9090/metrics</code>.</p>`})
+<p>See also the <a href="/pages/viewpage.action?pageId=121">deployment guide</a>.</p>`})
+	f.AddPage(fake.Page{ID: "110", ParentID: "100", Title: "User guide", SpaceKey: "DOC", Body: `
+<h1>Getting started</h1><p>Sign in, then pick a page.</p>
+<h2>Shortcuts</h2><ul><li>Ctrl+K: search</li><li>Ctrl+E: export</li></ul>`})
+	f.AddPage(fake.Page{ID: "111", ParentID: "110", Title: "FAQ", SpaceKey: "DOC", Body: `<p><em>Q:</em> How long do exports stay available? <em>A:</em> 48 hours.</p>`})
+	f.AddPage(fake.Page{ID: "120", ParentID: "100", Title: "Administration guide", SpaceKey: "DOC", Body: `<p>Server configuration.</p><pre>APP_ROLE=worker</pre>`})
+	f.AddPage(fake.Page{ID: "121", ParentID: "120", Title: "Deployment", SpaceKey: "DOC", Body: `<p>Use the provided Docker image.</p>`})
+	f.AddPage(fake.Page{ID: "122", ParentID: "120", Title: "Monitoring", SpaceKey: "DOC", Body: `<p>Prometheus metrics on <code>:9090/metrics</code>.</p>`})
 	for i := 1; i <= 3; i++ {
-		f.AddPage(fake.Page{ID: fmt.Sprint(1220 + i), ParentID: "122", Title: fmt.Sprintf("Alerte %d", i), SpaceKey: "DOC",
-			Body: fmt.Sprintf("<p>Procédure de traitement de l'alerte %d.</p>", i)})
+		f.AddPage(fake.Page{ID: fmt.Sprint(1220 + i), ParentID: "122", Title: fmt.Sprintf("Alert %d", i), SpaceKey: "DOC",
+			Body: fmt.Sprintf("<p>Handling procedure for alert %d.</p>", i)})
 	}
-	f.AddPage(fake.Page{ID: "200", Title: "Notes de réunion", SpaceKey: "TEAM", Body: `<p>Page isolée, sans enfants.</p>`})
+	f.AddPage(fake.Page{ID: "200", Title: "Meeting notes", SpaceKey: "TEAM", Body: `<p>Standalone page, no children.</p>`})
 }
 
 func demoImage() []byte {

@@ -10,7 +10,7 @@ import type { PageSummary } from '../api/types';
  */
 export function PageTree({ root }: { root: PageSummary }) {
   return (
-    <ul className="tree" role="tree" aria-label="Arborescence exportée">
+    <ul className="tree" role="tree" aria-label="Exported page tree">
       <TreeNode page={root} depth={0} initiallyOpen />
     </ul>
   );
@@ -37,14 +37,14 @@ function TreeNode({
           className="tree-toggle"
           onClick={() => setOpen((o) => !o)}
           disabled={leaf}
-          aria-label={open ? `Replier ${page.title}` : `Déplier ${page.title}`}
+          aria-label={open ? `Collapse ${page.title}` : `Expand ${page.title}`}
         >
           {leaf ? '•' : open ? '▾' : '▸'}
         </button>
         <span>{page.title}</span>
       </div>
-      {open && children.isLoading && <p className="tree-hint">Chargement…</p>}
-      {open && children.isError && <p className="tree-hint error">Impossible de charger les sous-pages.</p>}
+      {open && children.isLoading && <p className="tree-hint">Loading…</p>}
+      {open && children.isError && <p className="tree-hint error">Unable to load child pages.</p>}
       {open && children.data && children.data.length > 0 && (
         <ul role="group">
           {children.data.map((c) => (

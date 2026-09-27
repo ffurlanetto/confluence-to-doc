@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 )
 
@@ -29,6 +31,10 @@ type LibreOffice struct {
 	Binary string
 	// TempDir is where working directories are created ("" = os.TempDir()).
 	TempDir string
+	// Template, when set, is the company Word template applied to every
+	// document. PDFs are then produced from the templated DOCX, so both
+	// formats carry the same header, fonts and page setup.
+	Template *docx.Template
 }
 
 var filters = map[domain.Format]string{
@@ -37,8 +43,7 @@ var filters = map[domain.Format]string{
 }
 
 func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.Format, dst io.Writer) error {
-	filter, ok := filters[format]
-	if !ok {
+	if _, ok := filters[format]; !ok {
 		return domain.ErrInvalidFormat
 	}
 	work, err := os.MkdirTemp(l.TempDir, "c2d-convert-")
@@ -47,46 +52,88 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 	}
 	defer os.RemoveAll(work)
 
-	in := filepath.Join(work, "document.html")
-	if err := os.WriteFile(in, html, 0o600); err != nil {
+	source := filepath.Join(work, "document.html")
+	if err := os.WriteFile(source, html, 0o600); err != nil {
 		return err
 	}
-	outDir := filepath.Join(work, "out")
-	profile := "file://" + filepath.Join(work, "profile")
 
+	if l.Template == nil {
+		out, err := l.run(ctx, work, source, format)
+		if err != nil {
+			return err
+		}
+		return copyOut(out, dst)
+	}
+
+	// With a template, always go through DOCX: it is the format the company
+	// template is expressed in.
+	generated, err := l.run(ctx, work, source, domain.FormatDOCX)
+	if err != nil {
+		return err
+	}
+	templated, err := l.Template.Apply(generated)
+	if err != nil {
+		return fmt.Errorf("applying Word template %q: %w", l.Template.Name(), err)
+	}
+	if format == domain.FormatDOCX {
+		_, err = dst.Write(templated)
+		return err
+	}
+
+	docxPath := filepath.Join(work, "templated.docx")
+	if err := os.WriteFile(docxPath, templated, 0o600); err != nil {
+		return err
+	}
+	pdf, err := l.run(ctx, work, docxPath, domain.FormatPDF)
+	if err != nil {
+		return err
+	}
+	return copyOut(pdf, dst)
+}
+
+// run converts one file with a throw-away LibreOffice profile and returns the
+// produced document.
+func (l LibreOffice) run(ctx context.Context, work, source string, format domain.Format) ([]byte, error) {
 	bin := l.Binary
 	if bin == "" {
 		bin = "soffice"
 	}
-	cmd := exec.CommandContext(ctx, bin,
+	outDir := filepath.Join(work, "out-"+format.Extension())
+	args := []string{
 		"--headless", "--norestore", "--nolockcheck", "--nodefault", "--nologo",
-		"-env:UserInstallation="+profile,
+		"-env:UserInstallation=" + "file://" + filepath.Join(work, "profile"),
+	}
+	if strings.EqualFold(filepath.Ext(source), ".html") {
 		// Import as a Writer (not Writer/Web) document so page breaks,
 		// headings and the PDF/DOCX export filters behave as expected.
-		"--infilter=HTML (StarWriter)",
-		"--convert-to", filter,
-		"--outdir", outDir,
-		in,
-	)
+		args = append(args, "--infilter=HTML (StarWriter)")
+	}
+	args = append(args, "--convert-to", filters[format], "--outdir", outDir, source)
+
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = append(os.Environ(), "HOME="+work)
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		return fmt.Errorf("soffice failed: %w: %s", err, tail(output.Bytes(), 2048))
+		return nil, fmt.Errorf("soffice failed: %w: %s", err, tail(output.Bytes(), 2048))
 	}
 
-	f, err := os.Open(filepath.Join(outDir, "document."+format.Extension())) //nolint:gosec // G304: path built from our temp dir and a validated format
+	produced := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))+"."+format.Extension())
+	data, err := os.ReadFile(produced) //nolint:gosec // G304: path built from our own temp dir
 	if err != nil {
-		return fmt.Errorf("soffice produced no output: %w: %s", err, tail(output.Bytes(), 2048))
+		return nil, fmt.Errorf("soffice produced no output: %w: %s", err, tail(output.Bytes(), 2048))
 	}
-	defer f.Close()
-	if st, err := f.Stat(); err == nil && st.Size() == 0 {
-		return errors.New("soffice produced an empty document")
+	if len(data) == 0 {
+		return nil, errors.New("soffice produced an empty document")
 	}
-	_, err = io.Copy(dst, f)
+	return data, nil
+}
+
+func copyOut(data []byte, dst io.Writer) error {
+	_, err := dst.Write(data)
 	return err
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/exporter"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
@@ -31,6 +32,9 @@ type WorkerConfig struct {
 	MaxPages          int
 	MaxImageBytes     int64
 	ConfluenceWorkers int
+	// UseTemplateStyles tells the renderer to leave typography to the
+	// company Word template instead of styling the document itself.
+	UseTemplateStyles bool
 	// ShutdownGrace is how long in-flight jobs may run after shutdown starts
 	// before being released back to the queue.
 	ShutdownGrace time.Duration
@@ -239,9 +243,10 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	progress(pages, pages)
 
 	html, err := exporter.RenderHTML(ctx, root, exporter.RenderOptions{
-		Title:       root.Page.Title,
-		SourceURL:   root.Page.WebURL,
-		GeneratedAt: p.now(),
+		Title:             root.Page.Title,
+		SourceURL:         root.Page.WebURL,
+		GeneratedAt:       p.now(),
+		UseTemplateStyles: p.cfg.UseTemplateStyles,
 	}, exporter.ConfluenceAssets{Client: client, MaxImageBytes: p.cfg.MaxImageBytes})
 	if err != nil {
 		return "", 0, 0, err
@@ -272,7 +277,9 @@ func retryable(err error) bool {
 	switch {
 	case errors.Is(err, domain.ErrPATMissing),
 		errors.Is(err, exporter.ErrTooManyPages),
-		errors.Is(err, domain.ErrInvalidFormat):
+		errors.Is(err, domain.ErrInvalidFormat),
+		// A template that cannot be applied fails the same way every time.
+		errors.Is(err, docx.ErrApply):
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return false // the next attempt would most likely time out as well
@@ -285,18 +292,20 @@ func retryable(err error) bool {
 func UserMessage(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrPATMissing):
-		return "Aucun jeton d'accès Confluence (PAT) n'est configuré dans vos préférences."
+		return "No Confluence personal access token (PAT) is configured in your preferences."
 	case errors.Is(err, confluence.ErrUnauthorized):
-		return "Votre jeton d'accès Confluence (PAT) est invalide ou expiré. Mettez-le à jour dans vos préférences."
+		return "Your Confluence personal access token (PAT) is invalid or expired. Update it in your preferences."
 	case errors.Is(err, confluence.ErrForbidden):
-		return "Vous n'avez pas les droits nécessaires sur cette page Confluence."
+		return "You do not have the required permissions on this Confluence page."
 	case errors.Is(err, confluence.ErrNotFound):
-		return "La page Confluence est introuvable (supprimée ou non accessible)."
+		return "The Confluence page cannot be found (deleted or not accessible)."
 	case errors.Is(err, exporter.ErrTooManyPages):
-		return "L'arborescence contient trop de pages pour un seul export. Exportez une sous-branche."
+		return "The page tree contains too many pages for a single export. Export a sub-branch instead."
 	case errors.Is(err, context.DeadlineExceeded):
-		return "La génération a dépassé le temps maximum autorisé."
+		return "Generation exceeded the maximum allowed time."
+	case errors.Is(err, docx.ErrApply):
+		return "The company Word template could not be applied. Contact your administrator."
 	default:
-		return "Une erreur technique est survenue pendant la génération du document."
+		return "A technical error occurred while generating the document."
 	}
 }

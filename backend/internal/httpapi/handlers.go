@@ -25,7 +25,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_json", "Corps de requête JSON invalide.")
+		writeError(w, r, http.StatusBadRequest, "invalid_json", "Invalid JSON request body.")
 		return false
 	}
 	return true
@@ -53,6 +53,7 @@ type preferencesResponse struct {
 	DefaultFormat     string     `json:"defaultFormat"`
 	RetentionHours    int        `json:"retentionHours"`
 	MaxPages          int        `json:"maxPages"`
+	DocumentTemplate  string     `json:"documentTemplate,omitempty"`
 }
 
 func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +70,7 @@ func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
 		DefaultFormat:     string(p.DefaultFormat),
 		RetentionHours:    int(h.d.Retention.Hours()),
 		MaxPages:          h.d.MaxPages,
+		DocumentTemplate:  h.d.DocumentTemplate,
 	})
 }
 

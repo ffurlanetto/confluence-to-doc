@@ -1,26 +1,27 @@
-# ADR 0002 — Conversion HTML → PDF/DOCX avec LibreOffice
+# ADR 0002 — HTML → PDF/DOCX conversion with LibreOffice
 
-- Statut : accepté
-- Date : 2026-09-27
+- Status: accepted
+- Date: 2026-09-27
 
-## Contexte
+## Context
 
-Confluence fournit le rendu HTML des pages (`body.export_view`). Il faut produire du PDF **et** du Word
-fidèles (titres, tableaux, images), en conservant une structure de plan exploitable.
+Confluence exposes the rendered HTML of its pages (`body.export_view`). We need faithful PDF **and** Word
+output (headings, tables, images) with a usable document outline.
 
-Options étudiées : génération DOCX native en Go (coûteuse à rendre fidèle), Pandoc (bon DOCX, PDF via LaTeX
-lourd), Chromium (PDF uniquement), Gotenberg (service supplémentaire), LibreOffice headless.
+Options considered: native DOCX generation in Go (expensive to make faithful), Pandoc (good DOCX, PDF via
+a heavy LaTeX toolchain), Chromium (PDF only), Gotenberg (an extra service), headless LibreOffice.
 
-## Décision
+## Decision
 
-Assembler un HTML unique puis le convertir avec `soffice --headless` (filtre d'import « HTML (StarWriter) »)
-vers `writer_pdf_Export` ou `MS Word 2007 XML`. Chaque conversion utilise un profil LibreOffice jetable,
-ce qui permet la parallélisation (bornée par le pool de workers).
+Assemble a single HTML document, then convert it with `soffice --headless` (import filter
+“HTML (StarWriter)”) to `writer_pdf_Export` or `MS Word 2007 XML`. Each conversion uses a throw-away
+LibreOffice profile, which makes parallel conversions safe (bounded by the worker pool).
 
-## Conséquences
+## Consequences
 
-- ✅ Un seul moteur pour les deux formats ; les `hN` deviennent de vrais styles « Titre N » dans Word et des
-  signets PDF ; sauts de page, tableaux, images en data URI correctement embarqués (vérifié par test).
-- ✅ Encapsulé derrière l'interface `converter.Converter` : remplaçable (Gotenberg, Pandoc…) sans impact.
-- ⚠️ Image Docker plus lourde (~400 Mo) et ~1–2 s de démarrage par conversion.
-- ⚠️ Le CSS est partiellement supporté : le rendu s'appuie sur des attributs HTML simples (ex. `border` des tableaux).
+- ✅ One engine for both formats; `hN` elements become real “Heading N” styles in Word and PDF bookmarks;
+  page breaks, tables and data-URI images are embedded correctly (verified by tests).
+- ✅ Hidden behind the `converter.Converter` interface, so it can be replaced (Gotenberg, Pandoc…) without
+  touching the rest.
+- ⚠️ A heavier Docker image (~400 MB) and 1–2 s of start-up per conversion.
+- ⚠️ CSS support is partial: rendering relies on simple HTML attributes (for example table `border`).

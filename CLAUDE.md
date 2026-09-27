@@ -27,12 +27,16 @@ Conversion tests need `soffice` and are skipped otherwise.
 
 **Definition of done:** `make check` is green, new behaviour has tests, docs updated.
 
+**Read [docs/agent-memory.md](docs/agent-memory.md) before changing the conversion, the Word template or
+the queue.** It holds the non-obvious facts behind this codebase; add to it when you learn one.
+
 ## Architecture map
 
 ```
 HTTP request ─► httpapi (router, CSRF, auth middleware) ─► account / export services ─► store (PostgreSQL)
                                                                                      └► storage (local disk | S3)
-Worker loop  ─► export.Pool ─► exporter.BuildTree (confluence client) ─► exporter.RenderHTML ─► converter (LibreOffice) ─► storage
+Worker loop  ─► export.Pool ─► exporter.BuildTree (confluence client) ─► exporter.RenderHTML
+                             ─► converter (LibreOffice) ─► docx (company Word template) ─► storage
 Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExpired
 ```
 
@@ -45,6 +49,10 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 - Document storage goes through `storage.BlobStore`; the backend is picked in `cmd/server` (`newBlobStore`):
   S3 when `S3_BUCKET` is set, local disk otherwise. Any change to storage behaviour must keep
   `internal/storage/contract_test.go` passing for **both** backends.
+- `internal/docx` applies the company Word template when `WORD_TEMPLATE_PATH` is set; it is loaded and
+  validated once in `cmd/server`. With a template the renderer drops its own typography
+  (`RenderOptions.UseTemplateStyles`) and PDFs are produced from the templated DOCX. See
+  [docs/word-template.md](docs/word-template.md) and ADR 0006.
 
 ## Conventions
 
@@ -52,12 +60,12 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 - Go 1.26, standard library first. Errors: wrap with `%w`, compare with `errors.Is/As`, sentinel errors in `domain`.
 - Logging: `log/slog` with key/value pairs; never log secrets (PAT, tokens, cookies) or document contents.
 - Every DB write that a worker performs is guarded by `locked_by = workerID` (lease ownership). Keep it that way.
-- User-facing error text is French and produced in one place (`httpapi/errors.go`, `export.UserMessage`).
+- User-facing error text is English and produced in one place (`httpapi/errors.go`, `export.UserMessage`).
 - Tests: table-driven where it helps; use `fake.Server` for Confluence and `testutil.NewStore` for PostgreSQL.
 - Lint: `golangci-lint` (config in `backend/.golangci.yml`). A `//nolint` needs a justification comment.
 
 ### TypeScript / React
-- Strict TS, no `any`. Data fetching only via TanStack Query hooks. UI text in French.
+- Strict TS, no `any`. Data fetching only via TanStack Query hooks.
 - Accessibility: every input has a label, interactive elements are buttons/links, tests query by role/label.
 - Tests with Vitest + Testing Library, mocking `fetch` through `src/test/utils.tsx` (`mockApi`).
 
@@ -75,11 +83,17 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 6. Sessions: opaque random token in an HttpOnly SameSite=Lax cookie; only its SHA-256 is stored.
 7. Content from Confluence is sanitised (`exporter.droppedElements`, event handlers stripped) before conversion.
 
+## Language
+
+Everything in this repository is written in English: code, comments, tests, documentation, commit
+messages, UI text, and the strings that appear inside generated documents.
+
 ## Working style for agents
 
 - Start by reading the relevant package and its tests; mirror existing patterns.
 - Make small, focused changes; run the narrowest test first, then `make check`.
 - When adding an API endpoint: handler + route + DTO + `handleError` mapping + API test + TS type + hook.
 - When adding config: `internal/config` (+ test), `.env.example`, `docs/configuration.md`.
-- Record significant design decisions as a new ADR in `docs/adr/`.
+- Record significant design decisions as a new ADR in `docs/adr/`, and non-obvious findings in
+  `docs/agent-memory.md`.
 - Do not add dependencies casually; justify them in the PR description.

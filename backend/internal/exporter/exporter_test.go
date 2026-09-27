@@ -129,7 +129,7 @@ func TestRenderHTML(t *testing.T) {
 		`src="data:image/png;base64,`, // image inlined
 		`width="640" height="100"`,    // and fitted to the page
 		`[gone]`,                      // missing image replaced by alt text
-		`Table des matières`,
+		`Table of contents`,
 		`border="1"`, // tables get visible borders
 	}
 	for _, s := range mustContain {

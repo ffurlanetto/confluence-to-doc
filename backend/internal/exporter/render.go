@@ -36,6 +36,9 @@ type RenderOptions struct {
 	Title       string
 	SourceURL   string
 	GeneratedAt time.Time
+	// UseTemplateStyles omits this document's own typography so that the
+	// styles of a company Word template apply instead.
+	UseTemplateStyles bool
 }
 
 // RenderHTML assembles the whole tree into one self-contained HTML document
@@ -52,20 +55,24 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 	var b bytes.Buffer
 	b.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>`)
 	b.WriteString(html.EscapeString(opts.Title))
-	b.WriteString(`</title><style>` + documentCSS + `</style></head><body>`)
+	css := structuralCSS
+	if !opts.UseTemplateStyles {
+		css += typographyCSS
+	}
+	b.WriteString(`</title><style>` + css + `</style></head><body>`)
 
 	// Cover page.
 	fmt.Fprintf(&b, `<p class="doc-title">%s</p>`, html.EscapeString(opts.Title))
-	fmt.Fprintf(&b, `<p class="doc-meta">Exporté depuis Confluence le %s</p>`, opts.GeneratedAt.Format("02/01/2006 15:04 MST"))
+	fmt.Fprintf(&b, `<p class="doc-meta">Exported from Confluence on %s</p>`, opts.GeneratedAt.Format("2006-01-02 15:04 MST"))
 	if opts.SourceURL != "" {
-		fmt.Fprintf(&b, `<p class="doc-meta">Source : <a href="%[1]s">%[1]s</a></p>`, html.EscapeString(opts.SourceURL))
+		fmt.Fprintf(&b, `<p class="doc-meta">Source: <a href="%[1]s">%[1]s</a></p>`, html.EscapeString(opts.SourceURL))
 	}
 	count := root.Count()
 	fmt.Fprintf(&b, `<p class="doc-meta">%d page(s)</p>`, count)
 
 	// Table of contents (only meaningful when there is a hierarchy).
 	if count > 1 {
-		b.WriteString(`<p class="toc-title" style="page-break-before: always">Table des matières</p>`)
+		b.WriteString(`<p class="toc-title" style="page-break-before: always">Table of contents</p>`)
 		root.Walk(func(n *Node) {
 			fmt.Fprintf(&b, `<p class="toc-entry" style="margin-left: %.1fcm"><a href="#%s">%s %s</a></p>`,
 				float64(n.Depth)*0.8, anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title))
@@ -98,8 +105,10 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 	return b.Bytes(), nil
 }
 
-const documentCSS = `
-body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 10.5pt; }
+// structuralCSS carries layout that no Word template can supply, because it
+// describes this document's own structure: table rules, cover and contents
+// spacing, code blocks.
+const structuralCSS = `
 .doc-title { font-size: 26pt; font-weight: bold; margin-top: 6cm; }
 .doc-meta { color: #555555; }
 .toc-title { font-size: 16pt; font-weight: bold; }
@@ -107,9 +116,17 @@ body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 10.5pt; }
 table { border-collapse: collapse; }
 th, td { border: 1px solid #999999; padding: 3px; vertical-align: top; }
 th { background-color: #f0f0f0; }
-h1, h2, h3, h4, h5, h6 { font-family: "Liberation Sans", Arial, sans-serif; }
 pre, code { font-family: "Liberation Mono", monospace; font-size: 9pt; }
 pre { background-color: #f5f5f5; }
+`
+
+// typographyCSS sets the body and heading typeface. It is omitted when a Word
+// template is configured: the converter would turn these declarations into
+// direct formatting, which overrides the template's styles and would defeat
+// the company look.
+const typographyCSS = `
+body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 10.5pt; }
+h1, h2, h3, h4, h5, h6 { font-family: "Liberation Sans", Arial, sans-serif; }
 `
 
 func anchor(pageID string) string { return "page-" + pageID }

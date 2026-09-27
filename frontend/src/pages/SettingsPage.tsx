@@ -7,15 +7,16 @@ import { formatDate } from '../lib/format';
 
 export function SettingsPage() {
   const prefs = usePreferences();
-  if (prefs.isLoading) return <p>Chargement…</p>;
-  if (!prefs.data) return <p className="error">Impossible de charger vos préférences.</p>;
+  if (prefs.isLoading) return <p>Loading…</p>;
+  if (!prefs.data) return <p className="error">Unable to load your preferences.</p>;
   const p = prefs.data;
 
   return (
     <section>
-      <h1>Préférences</h1>
+      <h1>Preferences</h1>
       <PatCard hasPat={p.hasPat} updatedAt={p.patUpdatedAt} baseUrl={p.confluenceBaseUrl} />
       <DefaultFormatCard value={p.defaultFormat} />
+      <DocumentTemplateCard template={p.documentTemplate} />
     </section>
   );
 }
@@ -31,23 +32,23 @@ function PatCard({ hasPat, updatedAt, baseUrl }: { hasPat: boolean; updatedAt?: 
   };
 
   return (
-    <form className="card" onSubmit={onSubmit} aria-label="Jeton d’accès Confluence">
-      <h2>Jeton d’accès Confluence (PAT)</h2>
+    <form className="card" onSubmit={onSubmit} aria-label="Confluence personal access token">
+      <h2>Confluence personal access token (PAT)</h2>
       <p className="muted small">
-        Instance : <a href={baseUrl}>{baseUrl}</a>. Créez un jeton dans Confluence via{' '}
-        <em>Profil → Paramètres → Jetons d’accès personnels</em>. Il est vérifié puis stocké chiffré ; il
-        n’est jamais réaffiché.
+        Instance: <a href={baseUrl}>{baseUrl}</a>. Create a token in Confluence under{' '}
+        <em>Profile → Settings → Personal access tokens</em>. It is verified, then stored encrypted, and never
+        shown again.
       </p>
       <p>
-        Statut :{' '}
+        Status:{' '}
         {hasPat ? (
-          <strong className="ok">configuré (mis à jour le {formatDate(updatedAt)})</strong>
+          <strong className="ok">configured (updated on {formatDate(updatedAt)})</strong>
         ) : (
-          <strong className="error">non configuré</strong>
+          <strong className="error">not configured</strong>
         )}
       </p>
       <label htmlFor="pat" className="label">
-        {hasPat ? 'Remplacer le jeton' : 'Jeton'}
+        {hasPat ? 'Replace the token' : 'Token'}
       </label>
       <input
         id="pat"
@@ -60,15 +61,13 @@ function PatCard({ hasPat, updatedAt, baseUrl }: { hasPat: boolean; updatedAt?: 
       />
       {setPat.isError && (
         <p className="error">
-          {setPat.error instanceof ApiError ? setPat.error.message : 'Erreur inattendue.'}
+          {setPat.error instanceof ApiError ? setPat.error.message : 'Unexpected error.'}
         </p>
       )}
-      {setPat.isSuccess && (
-        <p className="ok">Jeton valide pour « {setPat.data.confluenceUser} » et enregistré.</p>
-      )}
+      {setPat.isSuccess && <p className="ok">Token valid for “{setPat.data.confluenceUser}” and saved.</p>}
       <div className="row">
         <button type="submit" className="button primary" disabled={setPat.isPending || token.trim() === ''}>
-          {setPat.isPending ? 'Vérification…' : 'Vérifier et enregistrer'}
+          {setPat.isPending ? 'Verifying…' : 'Verify and save'}
         </button>
         {hasPat && (
           <button
@@ -77,7 +76,7 @@ function PatCard({ hasPat, updatedAt, baseUrl }: { hasPat: boolean; updatedAt?: 
             onClick={() => deletePat.mutate()}
             disabled={deletePat.isPending}
           >
-            Supprimer le jeton
+            Delete the token
           </button>
         )}
       </div>
@@ -85,13 +84,32 @@ function PatCard({ hasPat, updatedAt, baseUrl }: { hasPat: boolean; updatedAt?: 
   );
 }
 
+function DocumentTemplateCard({ template }: { template?: string }) {
+  return (
+    <div className="card">
+      <h2>Document template</h2>
+      {template ? (
+        <p>
+          Documents are generated with the company template <strong className="ok">{template}</strong> — its
+          header, fonts and page layout apply to both Word and PDF exports.
+        </p>
+      ) : (
+        <p className="muted">
+          No company template is configured; documents use the built-in styling. An administrator can set one
+          with <code>WORD_TEMPLATE_PATH</code>.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DefaultFormatCard({ value }: { value: ExportFormat }) {
   const setFormat = useSetDefaultFormat();
   return (
     <div className="card">
-      <h2>Format par défaut</h2>
+      <h2>Default format</h2>
       <label htmlFor="default-format" className="label">
-        Format proposé lors d’un nouvel export
+        Format preselected for a new export
       </label>
       <select
         id="default-format"

@@ -15,25 +15,25 @@ export function NewExportPage() {
 
   return (
     <section>
-      <h1>Nouvel export</h1>
+      <h1>New export</h1>
       <label htmlFor="search" className="label">
-        Rechercher une page (titre, identifiant ou URL Confluence)
+        Search for a page (title, ID or Confluence URL)
       </label>
       <input
         id="search"
         type="search"
         className="input"
-        placeholder="ex. Guide utilisateur, 123456 ou https://confluence…/pages/viewpage.action?pageId=123456"
+        placeholder="e.g. User guide, 123456 or https://confluence…/pages/viewpage.action?pageId=123456"
         value={query}
         autoComplete="off"
         onChange={(e) => setQuery(e.target.value)}
       />
 
-      {search.isFetching && <p className="muted">Recherche…</p>}
+      {search.isFetching && <p className="muted">Searching…</p>}
       {search.isError && <p className="error">{errorMessage(search.error)}</p>}
-      {search.data && search.data.length === 0 && <p className="muted">Aucune page trouvée.</p>}
+      {search.data && search.data.length === 0 && <p className="muted">No page found.</p>}
       {search.data && search.data.length > 0 && (
-        <ul className="results" aria-label="Résultats de recherche">
+        <ul className="results" aria-label="Search results">
           {search.data.map((p) => (
             <li key={p.id}>
               <button
@@ -74,12 +74,12 @@ function ExportForm({ page }: { page: PageSummary }) {
   };
 
   return (
-    <form className="card" onSubmit={onSubmit} aria-label="Options d’export">
+    <form className="card" onSubmit={onSubmit} aria-label="Export options">
       <h2>{page.title}</h2>
       {page.webUrl && (
         <p className="small">
           <a href={page.webUrl} target="_blank" rel="noreferrer noopener">
-            Ouvrir dans Confluence ↗
+            Open in Confluence ↗
           </a>
         </p>
       )}
@@ -106,25 +106,25 @@ function ExportForm({ page }: { page: PageSummary }) {
           checked={includeChildren}
           onChange={(e) => setIncludeChildren(e.target.checked)}
         />
-        Inclure toutes les sous-pages (l’arborescence est conservée)
+        Include all child pages (the hierarchy is preserved)
       </label>
 
       {includeChildren && (
         <details open>
-          <summary>Aperçu de l’arborescence</summary>
+          <summary>Tree preview</summary>
           <PageTree root={page} />
-          {prefs.data && <p className="muted small">Limite : {prefs.data.maxPages} pages par export.</p>}
+          {prefs.data && <p className="muted small">Limit: {prefs.data.maxPages} pages per export.</p>}
         </details>
       )}
 
       {create.isError && <p className="error">{errorMessage(create.error)}</p>}
       <button type="submit" className="button primary" disabled={create.isPending}>
-        {create.isPending ? 'Envoi…' : 'Lancer l’export'}
+        {create.isPending ? 'Submitting…' : 'Start export'}
       </button>
     </form>
   );
 }
 
 function errorMessage(e: unknown): string {
-  return e instanceof ApiError ? e.message : 'Une erreur inattendue est survenue.';
+  return e instanceof ApiError ? e.message : 'An unexpected error occurred.';
 }

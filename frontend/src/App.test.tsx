@@ -17,7 +17,7 @@ describe('App', () => {
       'GET /api/me': () => ({ status: 401, body: { error: { code: 'unauthorized', message: 'x' } } }),
     });
     renderWithProviders(<App />, { route: '/new' });
-    const link = await screen.findByRole('link', { name: 'Se connecter' });
+    const link = await screen.findByRole('link', { name: 'Sign in' });
     expect(link).toHaveAttribute('href', expect.stringContaining('/auth/login?return_to='));
   });
 
@@ -49,7 +49,7 @@ describe('App', () => {
               format: 'docx',
               includeChildren: false,
               status: 'failed',
-              error: 'La page Confluence est introuvable.',
+              error: 'The Confluence page cannot be found.',
               attempts: 1,
               pagesDone: 0,
               pagesTotal: 0,
@@ -61,11 +61,11 @@ describe('App', () => {
     });
     renderWithProviders(<App />);
 
-    const download = await screen.findByRole('link', { name: /Télécharger/ });
+    const download = await screen.findByRole('link', { name: /Download/ });
     expect(download).toHaveAttribute('href', '/api/exports/e1/download');
     expect(screen.getByText('47 h')).toBeInTheDocument();
-    expect(screen.getByText('La page Confluence est introuvable.')).toBeInTheDocument();
-    expect(screen.getByText('Échec')).toBeInTheDocument();
+    expect(screen.getByText('The Confluence page cannot be found.')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 
   it('warns when no PAT is configured', async () => {
@@ -75,8 +75,8 @@ describe('App', () => {
       'GET /api/exports': () => ({ body: { exports: [] } }),
     });
     renderWithProviders(<App />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('Aucun jeton d’accès Confluence');
-    expect(screen.getByText('Vous n’avez encore lancé aucun export.')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('No Confluence personal access token');
+    expect(screen.getByText('You have not started any export yet.')).toBeInTheDocument();
   });
 
   it('sends the CSRF header when deleting an export', async () => {
@@ -104,7 +104,7 @@ describe('App', () => {
       'DELETE /api/exports/e1': () => ({ status: 204 }),
     });
     renderWithProviders(<App />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Supprimer l’export Guide' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete export Guide' }));
 
     const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'DELETE');
     expect(call).toBeDefined();
