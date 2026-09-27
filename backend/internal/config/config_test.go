@@ -76,3 +76,50 @@ func TestLoadRejectsRelativeURL(t *testing.T) {
 		t.Fatalf("expected URL error, got %v", err)
 	}
 }
+
+func TestS3DisabledByDefault(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.S3.Enabled() {
+		t.Fatal("S3 must be disabled when S3_BUCKET is not set")
+	}
+}
+
+func TestS3Config(t *testing.T) {
+	env := baseEnv()
+	env["S3_BUCKET"] = "exports"
+	env["S3_ENDPOINT"] = "http://minio:9000/"
+	cfg, err := load(getter(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.S3.Enabled() || cfg.S3.Endpoint != "http://minio:9000" || !cfg.S3.UsePathStyle || cfg.S3.Prefix != "exports/" {
+		t.Fatalf("unexpected S3 config %+v", cfg.S3)
+	}
+
+	env["S3_FORCE_PATH_STYLE"] = "false"
+	cfg, _ = load(getter(env))
+	if cfg.S3.UsePathStyle {
+		t.Error("S3_FORCE_PATH_STYLE=false must win over the endpoint default")
+	}
+}
+
+func TestS3ConfigValidation(t *testing.T) {
+	cases := map[string]map[string]string{
+		"S3_ACCESS_KEY_ID":    {"S3_ACCESS_KEY_ID": "key"}, // secret missing
+		"S3_ENDPOINT":         {"S3_ENDPOINT": "minio:9000"},
+		"S3_FORCE_PATH_STYLE": {"S3_FORCE_PATH_STYLE": "maybe"},
+	}
+	for want, extra := range cases {
+		env := baseEnv()
+		env["S3_BUCKET"] = "exports"
+		for k, v := range extra {
+			env[k] = v
+		}
+		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v: want error mentioning %s, got %v", extra, want, err)
+		}
+	}
+}

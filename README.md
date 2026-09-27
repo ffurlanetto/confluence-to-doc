@@ -9,6 +9,7 @@ Application web permettant à un utilisateur de choisir une page Confluence et d
 - ⏳ Génération **asynchrone** via une **file d'attente** PostgreSQL avec concurrence bornée, quotas par utilisateur
   et reprise automatique
 - 🗑️ Chaque export reste téléchargeable **48 h**, puis est supprimé automatiquement
+- 🪣 Stockage des documents sur **disque local** ou **S3 / compatible S3** (activé dès que `S3_BUCKET` est défini)
 - 🌳 L'arborescence est conservée : titres numérotés (`1`, `1.1`, `1.1.1`…), niveaux de titre Word/PDF,
   table des matières, liens internes réécrits, images embarquées
 
@@ -49,6 +50,7 @@ make dev-frontend   # terminal 3 : Vite (:5173) — mettre PUBLIC_URL=http://loc
 | `OIDC_CLIENT_SECRET`  | secret du client                                           |
 | `CONFLUENCE_BASE_URL` | `https://confluence.example.com` (Server / Data Center)    |
 | `ENCRYPTION_KEY`      | `openssl rand -base64 32` (à conserver dans un coffre)     |
+| `S3_BUCKET` (optionnel) | active le stockage S3 au lieu du disque local ; voir `S3_*` dans la configuration |
 
 Toutes les variables sont décrites dans [docs/configuration.md](docs/configuration.md).
 
@@ -66,7 +68,7 @@ flowchart LR
   W -- claim SKIP LOCKED --> PG
   W -- PAT de l'utilisateur --> C[Confluence REST API]
   W -- HTML --> LO[LibreOffice headless]
-  W -- PDF/DOCX --> S[(Stockage fichiers)]
+  W -- PDF/DOCX --> S[(Stockage<br/>disque local ou S3)]
   API -- téléchargement --> S
   J -- purge --> S
   API <-- Authorization Code + PKCE --> IDP[Fournisseur OIDC]
@@ -102,6 +104,7 @@ backend/
     exporter        parcours de l'arborescence + assemblage HTML
     export          cas d'usage : création, worker pool, janitor
     httpapi         routes REST, middlewares (CSRF, sécurité, logs, métriques)
+    storage         stockage des documents : disque local ou S3 (feature flag)
     store           PostgreSQL (migrations embarquées, file d'attente)
 frontend/src/
   api/              client HTTP typé + hooks React Query

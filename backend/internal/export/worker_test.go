@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/johannesboyne/gofakes3"
+	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
@@ -39,7 +42,7 @@ func (c htmlConverter) Convert(_ context.Context, html []byte, _ domain.Format, 
 
 type env struct {
 	store   *store.Store
-	blobs   *storage.Local
+	blobs   storage.BlobStore
 	svc     *export.Service
 	pool    *export.Pool
 	user    *domain.User
@@ -48,6 +51,15 @@ type env struct {
 }
 
 func newEnv(t *testing.T, conv htmlConverter) *env {
+	t.Helper()
+	blobs, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newEnvWithBlobs(t, conv, blobs)
+}
+
+func newEnvWithBlobs(t *testing.T, conv htmlConverter, blobs storage.BlobStore) *env {
 	t.Helper()
 	s := testutil.NewStore(t)
 	ctx := context.Background()
@@ -61,7 +73,6 @@ func newEnv(t *testing.T, conv htmlConverter) *env {
 
 	sealer, _ := crypto.NewSealer(bytes.Repeat([]byte{1}, 32))
 	acc := account.NewService(s, sealer, u, 5*time.Second)
-	blobs, _ := storage.NewLocal(t.TempDir())
 	user, _ := s.UpsertUser(ctx, "iss", uuid.NewString(), "", "")
 
 	pool := export.NewPool(s, acc, conv, blobs, export.WorkerConfig{
@@ -212,5 +223,69 @@ func TestUserMessageHidesInternals(t *testing.T) {
 		if msg == "" || strings.Contains(msg, "pq:") {
 			t.Errorf("bad message for %v: %q", err, msg)
 		}
+	}
+}
+
+func newFakeS3(t *testing.T) storage.BlobStore {
+	t.Helper()
+	backend := s3mem.New()
+	if err := backend.CreateBucket("exports"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(gofakes3.New(backend).Server())
+	t.Cleanup(srv.Close)
+	s, err := storage.NewS3(context.Background(), storage.S3Options{
+		Bucket: "exports", Region: "us-east-1", Endpoint: srv.URL,
+		AccessKeyID: "test", SecretAccessKey: "test", Prefix: "exports/", UsePathStyle: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestExportEndToEndWithS3(t *testing.T) {
+	e := newEnvWithBlobs(t, htmlConverter{}, newFakeS3(t))
+	ctx := context.Background()
+	if _, err := e.account.SetPAT(ctx, e.user.ID, "pat"); err != nil {
+		t.Fatal(err)
+	}
+	runPool(t, e.pool)
+
+	job, err := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "1", Format: domain.FormatPDF, IncludeChildren: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done := e.waitFor(t, job.ID, domain.StatusSucceeded, domain.StatusFailed); done.Status != domain.StatusSucceeded {
+		t.Fatalf("export failed: %s", done.Error)
+	}
+	_, f, err := e.svc.Open(ctx, job.ID, e.user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := io.ReadAll(f)
+	f.Close()
+	if !strings.Contains(string(content), "child body") {
+		t.Fatal("document stored in S3 is incomplete")
+	}
+
+	// Deleting the export removes the S3 object.
+	if err := e.svc.Delete(ctx, job.ID, e.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.blobs.Open(ctx, job.ID.String()+".pdf"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("object should be deleted, got %v", err)
+	}
+}
+
+func TestOpenReportsMissingFileAsNotFound(t *testing.T) {
+	e := newEnv(t, htmlConverter{})
+	ctx := context.Background()
+	job, _ := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "1", Format: domain.FormatPDF})
+	claimed, _ := e.store.ClaimNext(ctx, "w", time.Minute)
+	// Completed in the database, but the file never reached the storage.
+	_ = e.store.CompleteExport(ctx, claimed.ID, "w", job.ID.String()+".pdf", 3, 1, time.Hour)
+	if _, _, err := e.svc.Open(ctx, job.ID, e.user.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }

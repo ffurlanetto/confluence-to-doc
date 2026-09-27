@@ -69,7 +69,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	blobs, err := storage.NewLocal(cfg.Export.StorageDir)
+	blobs, err := newBlobStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -173,6 +173,25 @@ func healthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// newBlobStore is the storage feature flag: S3 when a bucket is configured,
+// local disk otherwise.
+func newBlobStore(ctx context.Context, cfg *config.Config) (storage.BlobStore, error) {
+	if !cfg.S3.Enabled() {
+		slog.Info("document storage: local disk", "dir", cfg.Export.StorageDir)
+		return storage.NewLocal(cfg.Export.StorageDir)
+	}
+	s3cfg := cfg.S3
+	slog.Info("document storage: S3", "bucket", s3cfg.Bucket, "prefix", s3cfg.Prefix,
+		"endpoint", s3cfg.Endpoint, "region", s3cfg.Region, "static_credentials", s3cfg.AccessKeyID != "")
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	return storage.NewS3(checkCtx, storage.S3Options{
+		Bucket: s3cfg.Bucket, Region: s3cfg.Region, Endpoint: s3cfg.Endpoint,
+		AccessKeyID: s3cfg.AccessKeyID, SecretAccessKey: s3cfg.SecretAccessKey,
+		Prefix: s3cfg.Prefix, UsePathStyle: s3cfg.UsePathStyle,
+	})
 }
 
 func newServer(addr string, h http.Handler) *http.Server {
