@@ -31,7 +31,7 @@ Conversion tests need `soffice` and are skipped otherwise.
 
 ```
 HTTP request ─► httpapi (router, CSRF, auth middleware) ─► account / export services ─► store (PostgreSQL)
-                                                                                     └► storage (files)
+                                                                                     └► storage (local disk | S3)
 Worker loop  ─► export.Pool ─► exporter.BuildTree (confluence client) ─► exporter.RenderHTML ─► converter (LibreOffice) ─► storage
 Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExpired
 ```
@@ -41,6 +41,10 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 - `internal/confluence/fake` and `internal/auth/oidcmock` are test/dev doubles — never wire them in `cmd/server`.
 - Frontend: `src/api/client.ts` is the only place calling `fetch`; components use hooks from `src/api/hooks.ts`.
   Types in `src/api/types.ts` mirror the Go DTOs in `backend/internal/httpapi/handlers.go` — change both together.
+
+- Document storage goes through `storage.BlobStore`; the backend is picked in `cmd/server` (`newBlobStore`):
+  S3 when `S3_BUCKET` is set, local disk otherwise. Any change to storage behaviour must keep
+  `internal/storage/contract_test.go` passing for **both** backends.
 
 ## Conventions
 

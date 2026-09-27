@@ -68,6 +68,19 @@ Robustesse de la file :
 - **Arrêt gracieux** : sur SIGTERM, les jobs en cours ont 20 s pour finir, sinon ils sont remis en file
   sans consommer de tentative.
 
+## Stockage des documents
+
+Les documents passent par l'interface `storage.BlobStore` (`Put`, `Open`, `Delete`), avec deux implémentations
+choisies par feature flag au démarrage (voir [configuration](configuration.md#stockage-des-documents-feature-flag-s3)) :
+
+| Backend | Activation         | Particularités                                                                 |
+| ------- | ------------------ | ------------------------------------------------------------------------------ |
+| Local   | défaut             | écriture atomique (fichier temporaire + rename) ; volume partagé si API et workers sont séparés |
+| S3      | `S3_BUCKET` défini | envoi en un `PutObject` depuis un fichier temporaire (pas d'objet partiel) ; lecture paresseuse par GET partiels, donc les requêtes HTTP `Range` sont servies sans tout télécharger |
+
+Une même suite de tests de contrat (`storage/contract_test.go`) s'exécute sur les deux backends
+(le S3 est simulé en mémoire par `gofakes3`).
+
 ## Rendu du document
 
 `exporter.RenderHTML` produit un HTML autonome ensuite converti par LibreOffice :
@@ -106,6 +119,5 @@ Robustesse de la file :
 
 ## Évolutions envisagées
 
-- Stockage objet (S3/MinIO) : implémenter `storage.BlobStore` (nécessaire si API et workers n'ont pas de volume partagé).
 - Confluence Cloud : authentification e-mail + API token (Basic) en plus du Bearer PAT.
 - Notification de fin d'export (e-mail, SSE) ; `LISTEN/NOTIFY` pour réveiller les workers distants.

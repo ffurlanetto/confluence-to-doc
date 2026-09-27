@@ -54,7 +54,27 @@ type Config struct {
 	ConfluenceTimeout time.Duration
 
 	Export ExportConfig
+	// S3 configures object storage for generated documents. It is enabled
+	// when S3_BUCKET is set; otherwise documents are stored on local disk.
+	S3 S3Config
 }
+
+type S3Config struct {
+	Bucket string
+	Region string
+	// Endpoint targets an S3-compatible service (MinIO, Ceph, Garage...);
+	// empty means AWS S3.
+	Endpoint string
+	// Static credentials; when empty, the AWS default credential chain is
+	// used (environment, shared config, IAM role / IRSA...).
+	AccessKeyID     string
+	SecretAccessKey string
+	Prefix          string
+	UsePathStyle    bool
+}
+
+// Enabled is the storage feature flag: S3 is used iff a bucket is configured.
+func (c S3Config) Enabled() bool { return c.Bucket != "" }
 
 type OIDCConfig struct {
 	IssuerURL    string
@@ -117,6 +137,16 @@ func load(getenv func(string) string) (*Config, error) {
 			ConfluenceWorkers: e.int("CONFLUENCE_FETCH_CONCURRENCY", 4),
 		},
 	}
+	cfg.S3 = S3Config{
+		Bucket:          e.str("S3_BUCKET", ""),
+		Region:          e.str("S3_REGION", "us-east-1"),
+		Endpoint:        strings.TrimRight(e.str("S3_ENDPOINT", ""), "/"),
+		AccessKeyID:     e.str("S3_ACCESS_KEY_ID", ""),
+		SecretAccessKey: e.str("S3_SECRET_ACCESS_KEY", ""),
+		Prefix:          e.str("S3_PREFIX", "exports/"),
+	}
+	// Path-style addressing is what most S3-compatible services expect.
+	cfg.S3.UsePathStyle = e.bool("S3_FORCE_PATH_STYLE", cfg.S3.Endpoint != "")
 	cfg.PublicURL = e.url("PUBLIC_URL", "http://localhost:8080")
 	cfg.ConfluenceBaseURL = e.url("CONFLUENCE_BASE_URL", "")
 	cfg.EncryptionKey = e.base64Key("ENCRYPTION_KEY", 32)
@@ -151,6 +181,16 @@ func (c *Config) validate() error {
 	}
 	if c.Export.ConfluenceWorkers < 1 {
 		errs = append(errs, errors.New("CONFLUENCE_FETCH_CONCURRENCY must be >= 1"))
+	}
+	if c.S3.Enabled() {
+		if (c.S3.AccessKeyID == "") != (c.S3.SecretAccessKey == "") {
+			errs = append(errs, errors.New("S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together"))
+		}
+		if c.S3.Endpoint != "" {
+			if u, err := url.Parse(c.S3.Endpoint); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				errs = append(errs, fmt.Errorf("S3_ENDPOINT: invalid absolute http(s) URL %q", c.S3.Endpoint))
+			}
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -189,6 +229,19 @@ func (e *envReader) int(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func (e *envReader) bool(key string, def bool) bool {
+	v := e.str(key, "")
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: invalid boolean %q", key, v))
+		return def
+	}
+	return b
 }
 
 func (e *envReader) duration(key string, def time.Duration) time.Duration {

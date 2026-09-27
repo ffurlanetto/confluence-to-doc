@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"time"
 
@@ -122,7 +123,9 @@ func (s *Service) Open(ctx context.Context, id, userID uuid.UUID) (*domain.Expor
 	}
 	f, err := s.blobs.Open(ctx, e.FileKey)
 	if err != nil {
-		if errors.Is(err, storage.ErrInvalidKey) {
+		// A missing file for a succeeded export (e.g. removed by a bucket
+		// lifecycle rule) is reported as not found rather than a 500.
+		if errors.Is(err, storage.ErrInvalidKey) || errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, domain.ErrNotFound
 		}
 		return nil, nil, err
