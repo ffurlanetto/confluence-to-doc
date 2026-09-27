@@ -1,0 +1,302 @@
+package export
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/exporter"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
+)
+
+type WorkerConfig struct {
+	Concurrency       int
+	PollInterval      time.Duration
+	JobTimeout        time.Duration
+	Lease             time.Duration
+	Retention         time.Duration
+	MaxPages          int
+	MaxImageBytes     int64
+	ConfluenceWorkers int
+	// ShutdownGrace is how long in-flight jobs may run after shutdown starts
+	// before being released back to the queue.
+	ShutdownGrace time.Duration
+}
+
+// Pool runs a bounded number of workers that consume the export queue.
+// Concurrency is the load-control knob: it caps simultaneous Confluence
+// crawls and LibreOffice processes per instance.
+type Pool struct {
+	repo      Repo
+	clients   ClientProvider
+	converter converter.Converter
+	blobs     storage.BlobStore
+	cfg       WorkerConfig
+	id        string
+	wake      chan struct{}
+	now       func() time.Time
+}
+
+func NewPool(repo Repo, clients ClientProvider, conv converter.Converter, blobs storage.BlobStore, cfg WorkerConfig) *Pool {
+	if cfg.Lease <= 0 {
+		cfg.Lease = time.Minute
+	}
+	if cfg.ShutdownGrace <= 0 {
+		cfg.ShutdownGrace = 30 * time.Second
+	}
+	host, _ := os.Hostname()
+	return &Pool{
+		repo: repo, clients: clients, converter: conv, blobs: blobs, cfg: cfg,
+		id:   fmt.Sprintf("%s-%s", host, uuid.NewString()[:8]),
+		wake: make(chan struct{}, 1),
+		now:  time.Now,
+	}
+}
+
+// Notify wakes an idle worker immediately (instead of waiting for the next
+// poll). Safe to call from any goroutine; never blocks.
+func (p *Pool) Notify() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Run blocks until ctx is cancelled and all workers have stopped.
+func (p *Pool) Run(ctx context.Context) {
+	slog.InfoContext(ctx, "export workers started", "worker_id", p.id, "concurrency", p.cfg.Concurrency)
+	var wg sync.WaitGroup
+	for i := range p.cfg.Concurrency {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.loop(ctx, fmt.Sprintf("%s/%d", p.id, i))
+		}()
+	}
+	wg.Wait()
+	slog.Info("export workers stopped", "worker_id", p.id)
+}
+
+func (p *Pool) loop(ctx context.Context, workerID string) {
+	ticker := time.NewTicker(p.cfg.PollInterval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		job, err := p.repo.ClaimNext(ctx, workerID, p.cfg.Lease)
+		switch {
+		case err == nil:
+			p.process(ctx, workerID, job)
+			continue // look for more work right away
+		case errors.Is(err, domain.ErrNotFound):
+		case ctx.Err() == nil:
+			slog.ErrorContext(ctx, "claiming export", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-p.wake:
+		}
+	}
+}
+
+// process runs one job. The job context is detached from the pool context so
+// shutdown gives in-flight work a grace period rather than killing it.
+func (p *Pool) process(poolCtx context.Context, workerID string, job *domain.Export) {
+	log := slog.With("export_id", job.ID, "worker_id", workerID, "attempt", job.Attempts)
+	start := p.now()
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(poolCtx), p.cfg.JobTimeout)
+	defer cancel()
+
+	if job.Attempts > job.MaxAttempts {
+		// Can only happen when workers repeatedly died while holding the job.
+		p.finish(ctx, log, job, workerID, errors.New("worker lost the job too many times"), false)
+		return
+	}
+
+	var done, total atomic.Int64
+	var leaseLost atomic.Bool
+	hbDone := make(chan struct{})
+	go func() {
+		defer close(hbDone)
+		t := time.NewTicker(p.cfg.Lease / 3)
+		defer t.Stop()
+		shutdown := poolCtx.Done()
+		var grace <-chan time.Time
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-shutdown:
+				// Shutdown: keep heartbeating during a grace period, then
+				// cancel the job so it is released back to the queue.
+				shutdown = nil
+				grace = time.After(p.cfg.ShutdownGrace)
+			case <-grace:
+				log.Warn("shutdown grace period elapsed, releasing job")
+				cancel()
+				return
+			case <-t.C:
+				err := p.repo.Heartbeat(ctx, job.ID, workerID, p.cfg.Lease, int(done.Load()), int(total.Load()))
+				if errors.Is(err, store.ErrLeaseLost) {
+					log.Info("export deleted or reclaimed, cancelling")
+					leaseLost.Store(true)
+					cancel()
+					return
+				}
+				if err != nil && ctx.Err() == nil {
+					log.Warn("heartbeat failed", "err", err)
+				}
+			}
+		}
+	}()
+
+	key, size, pages, err := p.generate(ctx, job, func(d, t int) { done.Store(int64(d)); total.Store(int64(t)) })
+	cancel()
+	<-hbDone
+	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(poolCtx), 10*time.Second)
+	defer finishCancel()
+
+	switch {
+	case leaseLost.Load():
+		p.discard(finishCtx, key)
+		return
+	case err != nil && poolCtx.Err() != nil && errors.Is(err, context.Canceled):
+		p.discard(finishCtx, key)
+		if rerr := p.repo.ReleaseExport(finishCtx, job.ID, workerID); rerr != nil {
+			log.Warn("releasing job", "err", rerr)
+		}
+		return
+	case err != nil:
+		p.finish(finishCtx, log, job, workerID, err, retryable(err))
+		return
+	}
+
+	if err := p.repo.CompleteExport(finishCtx, job.ID, workerID, key, size, pages, p.cfg.Retention); err != nil {
+		log.Warn("completing export", "err", err)
+		p.discard(finishCtx, key)
+		return
+	}
+	metrics.ExportsFinished.WithLabelValues("succeeded").Inc()
+	metrics.ExportDuration.WithLabelValues(string(job.Format)).Observe(p.now().Sub(start).Seconds())
+	metrics.ExportPages.Observe(float64(pages))
+	log.Info("export succeeded", "pages", pages, "bytes", size, "duration", p.now().Sub(start).String())
+}
+
+func (p *Pool) finish(ctx context.Context, log *slog.Logger, job *domain.Export, workerID string, cause error, retry bool) {
+	delay := time.Duration(1<<min(job.Attempts, 6)) * 15 * time.Second
+	outcome := "failed"
+	if retry && job.Attempts < job.MaxAttempts {
+		outcome = "retry"
+	}
+	metrics.ExportsFinished.WithLabelValues(outcome).Inc()
+	log.Warn("export attempt failed", "err", cause, "outcome", outcome)
+	if err := p.repo.FailExport(ctx, job.ID, workerID, UserMessage(cause), retry, delay, p.cfg.Retention); err != nil &&
+		!errors.Is(err, store.ErrLeaseLost) {
+		log.Error("recording export failure", "err", err)
+	}
+}
+
+func (p *Pool) discard(ctx context.Context, key string) {
+	if key != "" {
+		_ = p.blobs.Delete(ctx, key)
+	}
+}
+
+// generate crawls Confluence, renders and converts the document, and stores
+// it. It returns the storage key, the file size and the number of pages.
+func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(done, total int)) (string, int64, int, error) {
+	client, err := p.clients.Client(ctx, job.UserID)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	root, err := exporter.BuildTree(ctx, client, job.RootPageID, exporter.TreeOptions{
+		IncludeChildren: job.IncludeChildren,
+		MaxPages:        p.cfg.MaxPages,
+		Concurrency:     p.cfg.ConfluenceWorkers,
+		OnProgress:      func(n int) { progress(0, n) },
+	})
+	if err != nil {
+		return "", 0, 0, err
+	}
+	pages := root.Count()
+	progress(pages, pages)
+
+	html, err := exporter.RenderHTML(ctx, root, exporter.RenderOptions{
+		Title:       root.Page.Title,
+		SourceURL:   root.Page.WebURL,
+		GeneratedAt: p.now(),
+	}, exporter.ConfluenceAssets{Client: client, MaxImageBytes: p.cfg.MaxImageBytes})
+	if err != nil {
+		return "", 0, 0, err
+	}
+
+	key := job.ID.String() + "." + job.Format.Extension()
+	pr, pw := io.Pipe()
+	convErr := make(chan error, 1)
+	go func() {
+		err := p.converter.Convert(ctx, html, job.Format, pw)
+		pw.CloseWithError(err)
+		convErr <- err
+	}()
+	size, err := p.blobs.Put(ctx, key, pr)
+	_ = pr.CloseWithError(err)
+	if cerr := <-convErr; cerr != nil {
+		p.discard(context.WithoutCancel(ctx), key)
+		return "", 0, 0, fmt.Errorf("converting document: %w", cerr)
+	}
+	if err != nil {
+		p.discard(context.WithoutCancel(ctx), key)
+		return "", 0, 0, fmt.Errorf("storing document: %w", err)
+	}
+	return key, size, pages, nil
+}
+
+func retryable(err error) bool {
+	switch {
+	case errors.Is(err, domain.ErrPATMissing),
+		errors.Is(err, exporter.ErrTooManyPages),
+		errors.Is(err, domain.ErrInvalidFormat):
+		return false
+	case errors.Is(err, context.DeadlineExceeded):
+		return false // the next attempt would most likely time out as well
+	}
+	return confluence.Retryable(err)
+}
+
+// UserMessage converts an internal error into a message safe to show to the
+// user (no internal details, actionable when possible).
+func UserMessage(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrPATMissing):
+		return "Aucun jeton d'accès Confluence (PAT) n'est configuré dans vos préférences."
+	case errors.Is(err, confluence.ErrUnauthorized):
+		return "Votre jeton d'accès Confluence (PAT) est invalide ou expiré. Mettez-le à jour dans vos préférences."
+	case errors.Is(err, confluence.ErrForbidden):
+		return "Vous n'avez pas les droits nécessaires sur cette page Confluence."
+	case errors.Is(err, confluence.ErrNotFound):
+		return "La page Confluence est introuvable (supprimée ou non accessible)."
+	case errors.Is(err, exporter.ErrTooManyPages):
+		return "L'arborescence contient trop de pages pour un seul export. Exportez une sous-branche."
+	case errors.Is(err, context.DeadlineExceeded):
+		return "La génération a dépassé le temps maximum autorisé."
+	default:
+		return "Une erreur technique est survenue pendant la génération du document."
+	}
+}

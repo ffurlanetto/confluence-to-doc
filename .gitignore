@@ -1,0 +1,22 @@
+# Go
+/backend/bin/
+/backend/data/
+*.test
+coverage.out
+
+# Node
+node_modules/
+/frontend/dist/
+/frontend/coverage/
+
+# Env & local data
+.env
+.env.*
+!.env.example
+/data/
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
