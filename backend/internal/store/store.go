@@ -1,0 +1,337 @@
+// Package store is the PostgreSQL persistence layer. The exports table
+// doubles as a durable job queue: workers claim jobs with
+// SELECT ... FOR UPDATE SKIP LOCKED and hold them with a renewable lease, so
+// several worker processes can run safely and a crashed worker's jobs are
+// picked up again once its lease expires.
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
+)
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+func Open(ctx context.Context, dsn string) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parsing DATABASE_URL: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("connecting to database: %w", err)
+	}
+	return &Store{pool: pool}, nil
+}
+
+func (s *Store) Close() { s.pool.Close() }
+
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
+// ---------------------------------------------------------------- users
+
+func (s *Store) UpsertUser(ctx context.Context, issuer, subject, email, name string) (*domain.User, error) {
+	u := &domain.User{}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO users (id, issuer, subject, email, name) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (issuer, subject) DO UPDATE
+		   SET email = EXCLUDED.email, name = EXCLUDED.name, updated_at = now()
+		RETURNING id, issuer, subject, email, name, created_at`,
+		uuid.Must(uuid.NewV7()), issuer, subject, email, name,
+	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.CreatedAt)
+	return u, err
+}
+
+// ------------------------------------------------------------- sessions
+
+func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
+		tokenHash, userID, expiresAt)
+	return err
+}
+
+// SessionUser returns the user owning a valid (non-expired) session.
+func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (*domain.User, *domain.Session, error) {
+	u := &domain.User{}
+	sess := &domain.Session{}
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.id, u.issuer, u.subject, u.email, u.name, u.created_at, s.expires_at
+		  FROM sessions s JOIN users u ON u.id = s.user_id
+		 WHERE s.token_hash = $1 AND s.expires_at > now()`, tokenHash,
+	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.CreatedAt, &sess.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	sess.UserID = u.ID
+	return u, sess, nil
+}
+
+func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash)
+	return err
+}
+
+func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= now()`)
+	return tag.RowsAffected(), err
+}
+
+// ---------------------------------------------------------- preferences
+
+func (s *Store) GetPreferences(ctx context.Context, userID uuid.UUID) (*domain.Preferences, error) {
+	p := &domain.Preferences{UserID: userID, DefaultFormat: domain.FormatPDF}
+	var format string
+	err := s.pool.QueryRow(ctx, `
+		SELECT encrypted_pat, pat_updated_at, default_format FROM user_preferences WHERE user_id = $1`, userID,
+	).Scan(&p.EncryptedPAT, &p.PATUpdatedAt, &format)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return p, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.DefaultFormat = domain.Format(format)
+	return p, nil
+}
+
+// SetPAT stores (encryptedPAT != nil) or clears (nil) the user's token.
+func (s *Store) SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byte) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, encrypted_pat, pat_updated_at)
+		VALUES ($1, $2, CASE WHEN $2::bytea IS NULL THEN NULL ELSE now() END)
+		ON CONFLICT (user_id) DO UPDATE
+		   SET encrypted_pat = EXCLUDED.encrypted_pat, pat_updated_at = EXCLUDED.pat_updated_at, updated_at = now()`,
+		userID, encryptedPAT)
+	return err
+}
+
+func (s *Store) SetDefaultFormat(ctx context.Context, userID uuid.UUID, f domain.Format) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO user_preferences (user_id, default_format) VALUES ($1, $2)
+		ON CONFLICT (user_id) DO UPDATE SET default_format = EXCLUDED.default_format, updated_at = now()`,
+		userID, string(f))
+	return err
+}
+
+// -------------------------------------------------------------- exports
+
+const exportColumns = `id, user_id, root_page_id, root_title, format, include_children, status,
+	attempts, max_attempts, error, pages_done, pages_total, file_key, file_size,
+	created_at, started_at, finished_at, expires_at`
+
+func scanExport(row pgx.Row) (*domain.Export, error) {
+	e := &domain.Export{}
+	var format, status string
+	err := row.Scan(&e.ID, &e.UserID, &e.RootPageID, &e.RootTitle, &format, &e.IncludeChildren, &status,
+		&e.Attempts, &e.MaxAttempts, &e.Error, &e.PagesDone, &e.PagesTotal, &e.FileKey, &e.FileSize,
+		&e.CreatedAt, &e.StartedAt, &e.FinishedAt, &e.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.Format, e.Status = domain.Format(format), domain.ExportStatus(status)
+	return e, nil
+}
+
+// CreateExport enqueues an export unless the user already has maxActive
+// queued or running exports.
+func (s *Store) CreateExport(ctx context.Context, e *domain.Export, maxActive int) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// Serialise concurrent creations for the same user so the check below is race-free.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, e.UserID); err != nil {
+			return err
+		}
+		var active int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM exports WHERE user_id = $1 AND status IN ('queued', 'running')`,
+			e.UserID).Scan(&active); err != nil {
+			return err
+		}
+		if active >= maxActive {
+			return domain.ErrTooManyActive
+		}
+		row := tx.QueryRow(ctx, `
+			INSERT INTO exports (id, user_id, root_page_id, root_title, format, include_children, status, max_attempts)
+			VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7)
+			RETURNING `+exportColumns,
+			e.ID, e.UserID, e.RootPageID, e.RootTitle, string(e.Format), e.IncludeChildren, e.MaxAttempts)
+		created, err := scanExport(row)
+		if err != nil {
+			return err
+		}
+		*e = *created
+		return nil
+	})
+}
+
+func (s *Store) ListExports(ctx context.Context, userID uuid.UUID, limit int) ([]*domain.Export, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+exportColumns+` FROM exports WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+		userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.Export
+	for rows.Next() {
+		e, err := scanExport(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// GetExport returns an export owned by userID (ownership is part of the query
+// so another user's export is indistinguishable from a missing one).
+func (s *Store) GetExport(ctx context.Context, id, userID uuid.UUID) (*domain.Export, error) {
+	return scanExport(s.pool.QueryRow(ctx, `SELECT `+exportColumns+` FROM exports WHERE id = $1 AND user_id = $2`, id, userID))
+}
+
+// DeleteExport removes an export and returns it so the caller can delete the
+// file. Deleting a running export cancels it: the worker loses its lease.
+func (s *Store) DeleteExport(ctx context.Context, id, userID uuid.UUID) (*domain.Export, error) {
+	return scanExport(s.pool.QueryRow(ctx, `DELETE FROM exports WHERE id = $1 AND user_id = $2 RETURNING `+exportColumns, id, userID))
+}
+
+// ClaimNext atomically takes the oldest runnable job (queued, or running with
+// an expired lease) and leases it to workerID.
+func (s *Store) ClaimNext(ctx context.Context, workerID string, lease time.Duration) (*domain.Export, error) {
+	return scanExport(s.pool.QueryRow(ctx, `
+		WITH next AS (
+			SELECT id FROM exports
+			 WHERE (status = 'queued' AND run_after <= now())
+			    OR (status = 'running' AND locked_until < now())
+			 ORDER BY created_at
+			 LIMIT 1
+			 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE exports e
+		   SET status = 'running', attempts = e.attempts + 1, locked_by = $1,
+		       locked_until = now() + make_interval(secs => $2), started_at = COALESCE(e.started_at, now())
+		  FROM next WHERE e.id = next.id
+		RETURNING `+prefixed("e", exportColumns),
+		workerID, lease.Seconds()))
+}
+
+// ErrLeaseLost means the job was deleted or reclaimed by another worker.
+var ErrLeaseLost = errors.New("job lease lost")
+
+func affectOne(tag interface{ RowsAffected() int64 }, err error) error {
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// Heartbeat extends the lease and records progress.
+func (s *Store) Heartbeat(ctx context.Context, id uuid.UUID, workerID string, lease time.Duration, pagesDone, pagesTotal int) error {
+	return affectOne(s.pool.Exec(ctx, `
+		UPDATE exports SET locked_until = now() + make_interval(secs => $3), pages_done = $4, pages_total = $5
+		 WHERE id = $1 AND locked_by = $2 AND status = 'running'`, id, workerID, lease.Seconds(), pagesDone, pagesTotal))
+}
+
+func (s *Store) CompleteExport(ctx context.Context, id uuid.UUID, workerID, fileKey string, size int64, pages int, retention time.Duration) error {
+	return affectOne(s.pool.Exec(ctx, `
+		UPDATE exports SET status = 'succeeded', file_key = $3, file_size = $4, pages_done = $5, pages_total = $5,
+		       error = '', finished_at = now(), expires_at = now() + make_interval(secs => $6),
+		       locked_by = NULL, locked_until = NULL
+		 WHERE id = $1 AND locked_by = $2 AND status = 'running'`, id, workerID, fileKey, size, pages, retention.Seconds()))
+}
+
+// FailExport re-queues the job after retryDelay when retry is true and
+// attempts remain, otherwise marks it failed (kept visible for retention).
+func (s *Store) FailExport(ctx context.Context, id uuid.UUID, workerID, message string, retry bool, retryDelay, retention time.Duration) error {
+	return affectOne(s.pool.Exec(ctx, `
+		UPDATE exports
+		   SET status = CASE WHEN $4 AND attempts < max_attempts THEN 'queued' ELSE 'failed' END,
+		       run_after = now() + make_interval(secs => $5),
+		       finished_at = CASE WHEN $4 AND attempts < max_attempts THEN NULL ELSE now() END,
+		       expires_at = CASE WHEN $4 AND attempts < max_attempts THEN NULL ELSE now() + make_interval(secs => $6) END,
+		       error = $3, locked_by = NULL, locked_until = NULL
+		 WHERE id = $1 AND locked_by = $2 AND status = 'running'`,
+		id, workerID, message, retry, retryDelay.Seconds(), retention.Seconds()))
+}
+
+// ReleaseExport puts a running job back in the queue without consuming an
+// attempt (used on graceful shutdown).
+func (s *Store) ReleaseExport(ctx context.Context, id uuid.UUID, workerID string) error {
+	return affectOne(s.pool.Exec(ctx, `
+		UPDATE exports SET status = 'queued', attempts = GREATEST(attempts - 1, 0), run_after = now(),
+		       locked_by = NULL, locked_until = NULL
+		 WHERE id = $1 AND locked_by = $2 AND status = 'running'`, id, workerID))
+}
+
+type ExpiredExport struct {
+	ID      uuid.UUID
+	FileKey string
+}
+
+// ListExpired returns finished exports whose retention period is over.
+func (s *Store) ListExpired(ctx context.Context, limit int) ([]ExpiredExport, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, file_key FROM exports
+		 WHERE status IN ('succeeded', 'failed') AND expires_at <= now()
+		 ORDER BY expires_at LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (ExpiredExport, error) {
+		var e ExpiredExport
+		err := r.Scan(&e.ID, &e.FileKey)
+		return e, err
+	})
+}
+
+func (s *Store) MarkExpired(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE exports SET status = 'expired', file_key = '', file_size = 0 WHERE id = $1`, id)
+	return err
+}
+
+// PurgeExpired deletes history rows of exports expired for longer than keep.
+func (s *Store) PurgeExpired(ctx context.Context, keep time.Duration) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM exports WHERE status = 'expired' AND expires_at < now() - make_interval(secs => $1)`,
+		keep.Seconds())
+	return tag.RowsAffected(), err
+}
+
+func (s *Store) QueueStats(ctx context.Context) (domain.QueueStats, error) {
+	var st domain.QueueStats
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE status = 'queued'), count(*) FILTER (WHERE status = 'running')
+		  FROM exports WHERE status IN ('queued', 'running')`).Scan(&st.Queued, &st.Running)
+	return st, err
+}
+
+// prefixed qualifies a comma-separated column list with a table alias.
+func prefixed(alias, cols string) string {
+	parts := strings.Split(cols, ",")
+	for i, c := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(c)
+	}
+	return strings.Join(parts, ", ")
+}
