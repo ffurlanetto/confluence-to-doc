@@ -12,6 +12,7 @@ preserving the hierarchy**, as **Word (.docx)** or **PDF**.
 - 🏢 Documents can be produced in the **company format** from a Word template: header, footer, fonts and
   page layout (see [docs/word-template.md](docs/word-template.md))
 - 🪣 Documents are stored on **local disk** or **S3 / S3-compatible** object storage
+- 📈 **OpenTelemetry** traces and metrics over OTLP, with trace ids in the logs
 - 🌳 The hierarchy is preserved: numbered titles (`1`, `1.1`, `1.1.1`…), real Word/PDF heading levels,
   a table of contents, rewritten internal links and embedded images
 
@@ -49,6 +50,7 @@ make dev-frontend   # terminal 3: Vite (:5173) — set PUBLIC_URL=http://localho
 | `ENCRYPTION_KEY`      | `openssl rand -base64 32` (keep it in a vault)                      |
 | `WORD_TEMPLATE_PATH`  | optional: company Word template applied to every document           |
 | `S3_BUCKET`           | optional: switches document storage from local disk to S3           |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | optional: enables OpenTelemetry traces and metrics           |
 
 Every variable is described in [docs/configuration.md](docs/configuration.md).
 
@@ -113,7 +115,8 @@ backend/
     docx            applies the company Word template to a generated document
     exporter        page-tree crawl + HTML assembly
     export          use cases: creation, worker pool, janitor
-    httpapi         REST routes, middleware (CSRF, security, logs, metrics)
+    httpapi         REST routes, middleware (CSRF, security, logs, tracing)
+    observability   OpenTelemetry traces and metrics (OTLP)
     storage         document storage: local disk or S3 (feature flag)
     store           PostgreSQL (embedded migrations, job queue)
 frontend/src/

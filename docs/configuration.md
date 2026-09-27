@@ -23,7 +23,6 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `APP_ROLE`                     | `all`                   | `all`, `api` or `worker`                                        |
 | `PUBLIC_URL`                   | `http://localhost:8080` | Public URL; sets the OIDC redirect URI and the origin check. With `https`, cookies become `Secure` and HSTS is sent |
 | `HTTP_ADDR`                    | `:8080`                 | HTTP listener                                                   |
-| `METRICS_ADDR`                 | `:9090`                 | Prometheus listener (empty disables it). Do not expose publicly |
 | `STATIC_DIR`                   | _(empty)_               | Directory of the built SPA to serve                             |
 | `LOG_LEVEL`                    | `info`                  | `debug`, `info`, `warn`, `error`                                |
 | `LOG_FORMAT`                   | `json`                  | `json` or `text`                                                |
@@ -43,6 +42,49 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `EXPORT_STORAGE_DIR`           | `./data/exports`        | Directory of generated documents in local storage (ignored when S3 is enabled) |
 | `SOFFICE_PATH`                 | `soffice`               | LibreOffice binary                                              |
 | `WORD_TEMPLATE_PATH`           | _(empty)_               | Company Word template applied to every document                 |
+
+## Telemetry (OpenTelemetry)
+
+Traces and metrics are exported over OTLP as soon as `OTEL_EXPORTER_OTLP_ENDPOINT` is set; leaving it empty
+disables telemetry, and the instrumentation stays a no-op. There is no `/metrics` endpoint to scrape:
+the application pushes to a collector.
+
+| Variable                       | Default             | Description                                             |
+| ------------------------------ | ------------------- | ------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`  | _(empty)_           | Collector endpoint; **enables telemetry**               |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`  | `grpc`              | `grpc` (port 4317) or `http/protobuf` (port 4318)       |
+| `OTEL_SERVICE_NAME`            | `confluence-to-doc` | Service name reported to the backend                    |
+| `OTEL_TRACES_SAMPLER_ARG`      | `1`                 | Head sampling ratio for root spans, between 0 and 1     |
+| `OTEL_METRIC_EXPORT_INTERVAL`  | `1m`                | How often metrics are pushed                            |
+
+Every other standard `OTEL_*` variable — `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
+`OTEL_EXPORTER_OTLP_COMPRESSION`, `OTEL_RESOURCE_ATTRIBUTES` (to add `deployment.environment`, for
+example) — is read directly by the OTLP exporters, so anything your collector needs is available.
+
+### What is exported
+
+**Metrics** (`c2d.*`, plus `http.server.*` from the HTTP instrumentation):
+
+| Metric                   | Type      | Attributes                | Meaning                            |
+| ------------------------ | --------- | ------------------------- | ---------------------------------- |
+| `c2d.exports.created`    | counter   | format                    | Exports accepted into the queue    |
+| `c2d.exports.finished`   | counter   | format, outcome           | Attempts finished (succeeded, retry, failed) |
+| `c2d.export.duration`    | histogram | format                    | End-to-end generation time (s)     |
+| `c2d.export.pages`       | histogram | format                    | Pages per successful export        |
+| `c2d.queue.exports`      | gauge     | state (queued \| running) | Current queue depth                |
+| `http.server.request.duration` | histogram | method, route, status | HTTP latency                       |
+
+**Traces**: one trace per HTTP request, and one per export job — the job is a separate trace because it
+runs long after the request that queued it. Inside a job you get `confluence.crawl`, `document.render`,
+`document.convert`, and a span per Confluence HTTP call, which is where most of the time usually goes.
+Spans carry `c2d.export.id`, so a failing export can be found from its identifier.
+
+**Logs** stay on stdout, as containers expect, but every line emitted inside a span carries `trace_id` and
+`span_id`, so a log line leads to its trace and back.
+
+### Trying it locally
+
+`make up` starts a Jaeger instance alongside the stack; run an export and open <http://localhost:16686>.
 
 ## Company Word template
 

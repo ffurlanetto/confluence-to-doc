@@ -17,8 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/config"
@@ -27,7 +25,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
-	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/observability"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 )
@@ -56,6 +54,28 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	telemetry, err := observability.Setup(ctx, observability.Config{
+		Endpoint:       cfg.Telemetry.Endpoint,
+		Protocol:       cfg.Telemetry.Protocol,
+		ServiceName:    cfg.Telemetry.ServiceName,
+		ServiceVersion: version,
+		SampleRatio:    cfg.Telemetry.SampleRatio,
+		MetricInterval: cfg.Telemetry.MetricInterval,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Flush with a context of its own: ctx is already cancelled here. The
+		// timeout stays short so an unreachable collector cannot hold up the
+		// shutdown, which already budgets time for in-flight servers and jobs.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetry.Shutdown(flushCtx); err != nil {
+			slog.Error("flushing telemetry", "err", err)
+		}
+	}()
 
 	db, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -114,14 +134,13 @@ func run() error {
 		go func() { defer wg.Done(); janitor.Run(ctx) }()
 	}
 
-	var servers []*http.Server
-	if cfg.MetricsAddr != "" {
-		reg := metrics.NewRegistry(db.QueueStats)
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		servers = append(servers, newServer(cfg.MetricsAddr, mux))
+	if telemetry.Enabled {
+		if err := observability.RegisterQueueDepth(db.QueueStats); err != nil {
+			return fmt.Errorf("registering queue metrics: %w", err)
+		}
 	}
 
+	var servers []*http.Server
 	if cfg.Role.RunsAPI() {
 		authenticator, err := connectOIDC(ctx, cfg, db, sealer)
 		if err != nil {
@@ -268,5 +287,7 @@ func setupLogger(cfg *config.Config) {
 	} else {
 		h = slog.NewJSONHandler(os.Stdout, opts)
 	}
-	slog.SetDefault(slog.New(h))
+	// Logs emitted inside a span carry its trace and span ids, so a log line
+	// can be followed into the trace and back.
+	slog.SetDefault(slog.New(observability.LogHandler{Handler: h}))
 }

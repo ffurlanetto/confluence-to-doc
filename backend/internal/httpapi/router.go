@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
@@ -59,7 +60,7 @@ type Deps struct {
 
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, accessLog, middleware.Recoverer,
+	r.Use(middleware.RequestID, traceRoute, accessLog, middleware.Recoverer,
 		securityHeaders(d.PublicURL.Scheme == "https"))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -108,5 +109,7 @@ func NewRouter(d Deps) http.Handler {
 	if d.StaticDir != "" {
 		r.NotFound(spaHandler(d.StaticDir).ServeHTTP)
 	}
-	return r
+	// otelhttp opens the server span and records the request metric; the route
+	// pattern is filled in by traceRoute once chi has matched.
+	return otelhttp.NewHandler(r, "http.server")
 }

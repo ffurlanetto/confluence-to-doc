@@ -49,6 +49,24 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
 - The merge manipulates OOXML as text. `TestApplyProducesWellFormedXML` parses every part of the result;
   keep that test green, it is the cheapest guard against a broken package.
 
+### Telemetry (`internal/observability`)
+
+- Instruments are package-level variables created against the **global** meter provider before `Setup`
+  runs. OpenTelemetry's global registry re-points them once the real provider is installed; that
+  behaviour is what `TestInstrumentsReachTheProvider` pins down. Do not "fix" it with lazy initialisation.
+- The global meter provider can only be replaced once per process, which is why the package test installs
+  it in `TestMain` and shares one manual reader across tests.
+- Telemetry is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, but the propagators are installed either
+  way, so inbound `traceparent` headers are honoured even when nothing is exported.
+- Only the endpoint, protocol, service name, sampler ratio and export interval go through
+  `internal/config`. Headers, TLS and compression are read by the OTLP exporters straight from the
+  standard `OTEL_EXPORTER_OTLP_*` variables — do not duplicate them in the config package.
+- An export job is deliberately a **new root trace** (`trace.WithNewRoot`): it runs long after the request
+  that queued it, and a single trace spanning the queue wait would be useless. `c2d.export.id` connects
+  the two.
+- The observable gauge callback swallows database errors on purpose: returning one marks the whole metric
+  collection as failed.
+
 ### Queue and workers
 
 - The `exports` table **is** the queue. Every worker write is conditioned on `locked_by = workerID`; drop

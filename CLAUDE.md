@@ -49,6 +49,9 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 - Document storage goes through `storage.BlobStore`; the backend is picked in `cmd/server` (`newBlobStore`):
   S3 when `S3_BUCKET` is set, local disk otherwise. Any change to storage behaviour must keep
   `internal/storage/contract_test.go` passing for **both** backends.
+- `internal/observability` owns OpenTelemetry. Instruments are package-level and created against the
+  global provider, which is a no-op until `Setup` runs — OTel re-points them, so never create instruments
+  lazily "to be safe". Telemetry is enabled by `OTEL_EXPORTER_OTLP_ENDPOINT`; there is no `/metrics`.
 - `internal/docx` applies the company Word template when `WORD_TEMPLATE_PATH` is set; it is loaded and
   validated once in `cmd/server`. With a template the renderer drops its own typography
   (`RenderOptions.UseTemplateStyles`) and PDFs are produced from the templated DOCX. See

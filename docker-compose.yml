@@ -24,9 +24,6 @@ services:
     build:
       context: .
       target: runtime
-    depends_on:
-      db:
-        condition: service_healthy
     env_file:
       - path: .env
         required: false
@@ -40,13 +37,28 @@ services:
       # Development-only key. Generate your own with: openssl rand -base64 32
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGV2LW9ubHktZGV2LW9ubHktZGV2LW9ubHktZGV2LTA=}
       LOG_FORMAT: text
+      # Traces and metrics go to the local Jaeger; unset to disable telemetry.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://jaeger:4317}
+      OTEL_SERVICE_NAME: confluence-to-doc
+    depends_on:
+      db:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
     ports:
       - "8080:8080" # application
-      - "9090:9090" # Prometheus metrics
       - "8090:8090" # fake Confluence (devmocks)
       - "8091:8091" # fake OIDC provider (devmocks)
     volumes:
       - exports:/data
+
+  # Traces and metrics backend for local development: OTLP in, UI on :16686.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # Jaeger UI
 
   devmocks:
     build:

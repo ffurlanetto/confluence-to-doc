@@ -4,14 +4,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-
-	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // securityHeaders applies a strict baseline suitable for an SPA served from
@@ -66,7 +66,26 @@ func csrfProtect(publicURL *url.URL) func(http.Handler) http.Handler {
 	}
 }
 
-// accessLog logs one structured line per request and records latency metrics.
+// traceRoute completes the span and the HTTP metric started by otelhttp with
+// the chi route pattern, which is only known once routing has happened.
+func traceRoute(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+		route := chi.RouteContext(r.Context()).RoutePattern()
+		if route == "" {
+			return
+		}
+		if labeler, ok := otelhttp.LabelerFromContext(r.Context()); ok {
+			labeler.Add(semconv.HTTPRoute(route))
+		}
+		if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+			span.SetName(r.Method + " " + route)
+			span.SetAttributes(semconv.HTTPRoute(route))
+		}
+	})
+}
+
+// accessLog logs one structured line per request.
 func accessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -82,7 +101,6 @@ func accessLog(next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 		dur := time.Since(start)
-		metrics.HTTPRequests.WithLabelValues(route, r.Method, strconv.Itoa(status)).Observe(dur.Seconds())
 
 		level := slog.LevelInfo
 		switch {

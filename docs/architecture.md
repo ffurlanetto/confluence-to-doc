@@ -134,11 +134,16 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
 
 - Structured JSON logs (`log/slog`), one line per request with a `request_id`.
 - `/healthz` (liveness), `/readyz` (database reachable).
-- Prometheus metrics on a separate port (`METRICS_ADDR`, default `:9090`): `c2d_queue_queued`,
-  `c2d_queue_running`, `c2d_exports_created_total`, `c2d_exports_finished_total{outcome}`,
-  `c2d_export_duration_seconds`, `c2d_export_pages`, `c2d_http_request_duration_seconds`.
+- OpenTelemetry traces and metrics pushed over OTLP, enabled by `OTEL_EXPORTER_OTLP_ENDPOINT`
+  (see [configuration](configuration.md#telemetry-opentelemetry)). An HTTP request is one trace; an export
+  job is another, with a span per pipeline stage — crawl, render, convert — and one per Confluence call.
+  Metrics cover the queue depth, export outcomes, durations and sizes.
+- Log lines emitted inside a span carry `trace_id` and `span_id`, which links the three signals.
 
 ## Possible next steps
+
+- Link an export job's trace to the request that queued it, by storing the W3C trace context on the row
+  (a migration and a span link); today the export id is the connection between the two traces.
 
 - Confluence Cloud: email + API token (Basic) authentication alongside the Bearer PAT.
 - Export completion notifications (email, SSE); `LISTEN/NOTIFY` to wake remote workers.

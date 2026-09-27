@@ -123,3 +123,57 @@ func TestS3ConfigValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestTelemetryDisabledByDefault(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Telemetry.Enabled() {
+		t.Fatal("telemetry must be off without an OTLP endpoint")
+	}
+	if cfg.Telemetry.ServiceName != "confluence-to-doc" || cfg.Telemetry.SampleRatio != 1 {
+		t.Fatalf("unexpected telemetry defaults: %+v", cfg.Telemetry)
+	}
+}
+
+func TestTelemetryConfig(t *testing.T) {
+	env := baseEnv()
+	env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://collector:4317/"
+	env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf"
+	env["OTEL_SERVICE_NAME"] = "c2d-prod"
+	env["OTEL_TRACES_SAMPLER_ARG"] = "0.25"
+	env["OTEL_METRIC_EXPORT_INTERVAL"] = "15s"
+
+	cfg, err := load(getter(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Telemetry.Enabled() || cfg.Telemetry.Endpoint != "http://collector:4317" {
+		t.Fatalf("endpoint = %q", cfg.Telemetry.Endpoint)
+	}
+	if cfg.Telemetry.Protocol != "http/protobuf" || cfg.Telemetry.ServiceName != "c2d-prod" {
+		t.Fatalf("unexpected telemetry config: %+v", cfg.Telemetry)
+	}
+	if cfg.Telemetry.SampleRatio != 0.25 || cfg.Telemetry.MetricInterval != 15*time.Second {
+		t.Fatalf("unexpected telemetry config: %+v", cfg.Telemetry)
+	}
+}
+
+func TestTelemetryConfigValidation(t *testing.T) {
+	cases := map[string]map[string]string{
+		"OTEL_EXPORTER_OTLP_PROTOCOL": {"OTEL_EXPORTER_OTLP_PROTOCOL": "carrier-pigeon"},
+		"OTEL_EXPORTER_OTLP_ENDPOINT": {"OTEL_EXPORTER_OTLP_ENDPOINT": "collector:4317"},
+		"OTEL_TRACES_SAMPLER_ARG":     {"OTEL_TRACES_SAMPLER_ARG": "42"},
+	}
+	for want, extra := range cases {
+		env := baseEnv()
+		env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://collector:4317"
+		for k, v := range extra {
+			env[k] = v
+		}
+		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v: want an error mentioning %s, got %v", extra, want, err)
+		}
+	}
+}

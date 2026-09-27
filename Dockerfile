@@ -34,12 +34,11 @@ COPY --from=web /web/dist /app/web
 ENV STATIC_DIR=/app/web \
     EXPORT_STORAGE_DIR=/data/exports \
     HTTP_ADDR=:8080 \
-    METRICS_ADDR=:9090 \
     HOME=/home/app
 
 USER app
 VOLUME ["/data"]
-EXPOSE 8080 9090
+EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD ["/app/server", "healthcheck"]
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/server"]
 

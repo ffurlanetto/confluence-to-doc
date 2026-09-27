@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
-	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/observability"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 )
@@ -82,7 +83,8 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*domain.Export
 	if err := s.repo.CreateExport(ctx, e, s.limits.MaxActivePerUser); err != nil {
 		return nil, err
 	}
-	metrics.ExportsCreated.WithLabelValues(string(e.Format)).Inc()
+	observability.ExportsCreated.Add(ctx, 1, metric.WithAttributes(
+		observability.AttrFormat.String(string(e.Format))))
 	slog.InfoContext(ctx, "export enqueued", "export_id", e.ID, "page_id", e.RootPageID, "format", e.Format)
 	if s.notify != nil {
 		s.notify()
