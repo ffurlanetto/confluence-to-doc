@@ -1,0 +1,60 @@
+{{- include "confluence-to-doc.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confluence-to-doc.configMapName" . }}
+  labels: {{- include "confluence-to-doc.labels" . | nindent 4 }}
+data:
+  PUBLIC_URL: {{ .Values.publicUrl | quote }}
+  HTTP_ADDR: ":8080"
+  LOG_LEVEL: {{ .Values.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.logging.format | quote }}
+  STATIC_DIR: "/app/web"
+  SESSION_TTL: {{ .Values.sessionTtl | quote }}
+
+  CONFLUENCE_BASE_URL: {{ .Values.confluence.baseUrl | quote }}
+  CONFLUENCE_TIMEOUT: {{ .Values.confluence.timeout | quote }}
+  CONFLUENCE_FETCH_CONCURRENCY: {{ .Values.confluence.fetchConcurrency | quote }}
+
+  OIDC_ISSUER_URL: {{ .Values.oidc.issuerUrl | quote }}
+  OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}
+  OIDC_SCOPES: {{ .Values.oidc.scopes | quote }}
+
+  EXPORT_RETENTION: {{ .Values.export.retention | quote }}
+  EXPORT_WORKER_CONCURRENCY: {{ .Values.export.workerConcurrency | quote }}
+  EXPORT_MAX_ACTIVE_PER_USER: {{ .Values.export.maxActivePerUser | quote }}
+  EXPORT_MAX_PAGES: {{ .Values.export.maxPages | quote }}
+  EXPORT_MAX_ATTEMPTS: {{ .Values.export.maxAttempts | quote }}
+  EXPORT_JOB_TIMEOUT: {{ .Values.export.jobTimeout | quote }}
+  EXPORT_MAX_IMAGE_BYTES: {{ .Values.export.maxImageBytes | quote }}
+  EXPORT_POLL_INTERVAL: {{ .Values.export.pollInterval | quote }}
+  EXPORT_JANITOR_INTERVAL: {{ .Values.export.janitorInterval | quote }}
+  {{- if eq .Values.storage.type "filesystem" }}
+  EXPORT_STORAGE_DIR: {{ .Values.storage.filesystem.path | quote }}
+  {{- else }}
+  S3_BUCKET: {{ .Values.storage.s3.bucket | quote }}
+  S3_REGION: {{ .Values.storage.s3.region | quote }}
+  S3_PREFIX: {{ .Values.storage.s3.prefix | quote }}
+  {{- with .Values.storage.s3.endpoint }}
+  S3_ENDPOINT: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.storage.s3.forcePathStyle }}
+  S3_FORCE_PATH_STYLE: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.wordTemplate.enabled }}
+  WORD_TEMPLATE_PATH: {{ printf "%s/%s" (trimSuffix "/" .Values.wordTemplate.mountPath) .Values.wordTemplate.key | quote }}
+  {{- end }}
+  {{- if .Values.telemetry.enabled }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.telemetry.endpoint | quote }}
+  OTEL_EXPORTER_OTLP_PROTOCOL: {{ .Values.telemetry.protocol | quote }}
+  OTEL_SERVICE_NAME: {{ .Values.telemetry.serviceName | quote }}
+  OTEL_TRACES_SAMPLER_ARG: {{ .Values.telemetry.sampleRatio | quote }}
+  OTEL_METRIC_EXPORT_INTERVAL: {{ .Values.telemetry.metricExportInterval | quote }}
+  {{- with .Values.telemetry.metricPrefix }}
+  TELEMETRY_METRIC_PREFIX: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.telemetry.resourceAttributes }}
+  OTEL_RESOURCE_ATTRIBUTES: {{ include "confluence-to-doc.resourceAttributes" . | quote }}
+  {{- end }}
+  {{- end }}

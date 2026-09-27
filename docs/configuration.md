@@ -192,9 +192,13 @@ Declare a **confidential** client with:
 
 ## Deployment
 
+- Kubernetes: use the [Helm chart](../charts/confluence-to-doc/), which turns these variables into a
+  ConfigMap and references your own Secrets.
 - Image: `docker build --target runtime -t confluence-to-doc .` (LibreOffice included, non-root user,
   built-in `HEALTHCHECK` through `server healthcheck`).
 - Put the application behind a TLS reverse proxy; `PUBLIC_URL` must be the public `https://` URL.
 - With local storage, the `api` and `worker` roles must share `EXPORT_STORAGE_DIR` (RWX volume). With S3
   (`S3_BUCKET`) no shared volume is needed: API and workers can run on different machines.
 - Back up PostgreSQL; the exported documents are ephemeral (48 h) and need no backup.
+- Every role serves `/healthz` and `/readyz` on `HTTP_ADDR`, workers included, so a worker pod can be
+  probed like any other.

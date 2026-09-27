@@ -27,7 +27,18 @@ make up            # = docker compose up --build
 Open <http://localhost:8080>, sign in (the mock OIDC provider signs you in automatically), then set the PAT
 `dev-pat` in **Preferences**. The mock Confluence contains a demo tree (search for “Documentation”).
 
-### Option 2 — Locally, without Docker
+### Option 2 — Kubernetes (Helm)
+
+```bash
+helm upgrade --install confluence-to-doc ./charts/confluence-to-doc \
+  -n confluence-to-doc --create-namespace \
+  -f charts/confluence-to-doc/values-production.yaml
+```
+
+The chart deploys the application only: PostgreSQL, object storage, Confluence and the OIDC provider stay
+external. API and worker pods scale separately. See [charts/confluence-to-doc](charts/confluence-to-doc/).
+
+### Option 3 — Locally, without Docker
 
 Requirements: Go ≥ 1.26, Node ≥ 22, PostgreSQL ≥ 14, LibreOffice (`soffice`) for the conversion.
 
@@ -86,6 +97,7 @@ Details in [docs/architecture.md](docs/architecture.md); decisions in [docs/adr/
 | [docs/configuration.md](docs/configuration.md)       | Every environment variable, deployment notes               |
 | [docs/word-template.md](docs/word-template.md)       | Preparing and troubleshooting the company Word template    |
 | [docs/agent-memory.md](docs/agent-memory.md)         | Durable project memory for AI agents and new contributors  |
+| [charts/confluence-to-doc/](charts/confluence-to-doc/) | Helm chart: values, storage choices, operational notes   |
 | [docs/adr/](docs/adr/)                               | Architecture decision records                              |
 | [CLAUDE.md](CLAUDE.md)                               | Entry point for AI coding agents                           |
 

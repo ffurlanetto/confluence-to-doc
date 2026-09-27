@@ -1,0 +1,25 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "confluence-to-doc.fullname" . }}-worker
+  labels:
+    {{- include "confluence-to-doc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "confluence-to-doc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  # An export in flight is finished, not interrupted: replace pods one at a time.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    {{- include "confluence-to-doc.podTemplate" (dict "ctx" . "component" "worker" "role" "worker") | nindent 4 }}
+{{- end }}

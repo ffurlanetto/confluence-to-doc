@@ -80,6 +80,17 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   every metric export fail with `unknown service opentelemetry.proto.collector.metrics.v1.MetricsService`.
   The dev stack therefore sends OTLP to a collector, which fans out to Jaeger and to its own log.
 
+### Kubernetes chart
+
+- The chart lives in `charts/confluence-to-doc/` because that is where `chart-releaser` and
+  `chart-testing` look by default.
+- A worker serves no API, yet Kubernetes still needs probe endpoints, which is why `cmd/server` starts a
+  health-only HTTP server when `APP_ROLE=worker`. Remove it and worker pods lose their liveness probe.
+- API and worker pods share nothing, so filesystem storage needs ReadWriteMany; the chart refuses the
+  combination rather than letting exports vanish between pods.
+- `readOnlyRootFilesystem: true` is safe and verified: LibreOffice only writes under `/tmp` and `$HOME`,
+  both `emptyDir`, and the converter points `HOME` at its own working directory anyway.
+
 ### Local stack (compose)
 
 - `devmocks` joins the app's network namespace (`network_mode: service:app`). Restarting `app` alone

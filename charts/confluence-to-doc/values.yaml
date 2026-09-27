@@ -1,0 +1,234 @@
+# Default values for confluence-to-doc.
+#
+# A bare `helm install` cannot work: the application needs a database, an OIDC
+# client, a Confluence URL and an encryption key, and the chart refuses to
+# render without them. See values-production.yaml for a filled-in example.
+
+image:
+  repository: ghcr.io/ffurlanetto/confluence-to-doc
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Public URL of the application. Used for the OIDC redirect URI and the
+# same-origin check, so it must match what browsers actually use. Required.
+publicUrl: ""
+
+# -- Confluence Server / Data Center instance every user connects to. Required.
+confluence:
+  baseUrl: ""
+  # Timeout of a single Confluence request.
+  timeout: 30s
+  # Parallel Confluence requests per export.
+  fetchConcurrency: 4
+
+# -- External PostgreSQL. No database is deployed by this chart.
+database:
+  # Full DSN, e.g. postgres://user:pass@host:5432/db?sslmode=require
+  # Stored in the chart-managed Secret; prefer existingSecret in production.
+  url: ""
+  # Read the DSN from a Secret you manage instead.
+  existingSecret: ""
+  existingSecretKey: DATABASE_URL
+
+# -- OpenID Connect provider. The client must be confidential, with
+# ${publicUrl}/auth/callback as a redirect URI.
+oidc:
+  issuerUrl: ""
+  clientId: ""
+  clientSecret: ""
+  # Read the client secret from a Secret you manage instead.
+  existingSecret: ""
+  existingSecretKey: OIDC_CLIENT_SECRET
+  scopes: "openid profile email"
+
+# -- 32 random bytes, base64 (`openssl rand -base64 32`), encrypting the users'
+# Confluence tokens. Changing it forces every user to enter their token again,
+# so keep it in a real secret store. Required.
+encryptionKey: ""
+existingEncryptionKeySecret: ""
+existingEncryptionKeySecretKey: ENCRYPTION_KEY
+
+sessionTtl: 12h
+
+# -- Where generated documents are stored.
+#
+# "s3" is the right choice when API and workers run in separate pods, which is
+# the default here. "filesystem" needs a ReadWriteMany volume shared by both.
+storage:
+  type: s3 # s3 | filesystem
+
+  s3:
+    bucket: ""
+    region: us-east-1
+    # S3-compatible service (MinIO, Ceph…); empty targets AWS.
+    endpoint: ""
+    prefix: exports/
+    # Leave the keys empty to use the pod's IAM identity (IRSA, workload
+    # identity) through the AWS default credential chain.
+    accessKeyId: ""
+    secretAccessKey: ""
+    existingSecret: ""
+    existingSecretAccessKeyIdKey: S3_ACCESS_KEY_ID
+    existingSecretSecretAccessKeyKey: S3_SECRET_ACCESS_KEY
+    # Path-style addressing; defaults to true when an endpoint is set.
+    forcePathStyle: ""
+
+  filesystem:
+    path: /data/exports
+    # An existing claim, or one created by this chart.
+    existingClaim: ""
+    size: 20Gi
+    storageClassName: ""
+    # ReadWriteMany is required as soon as workers run in their own pods.
+    accessModes:
+      - ReadWriteMany
+
+# -- Export behaviour. These map one-to-one onto the EXPORT_* variables.
+export:
+  retention: 48h
+  workerConcurrency: 2
+  maxActivePerUser: 5
+  maxPages: 500
+  maxAttempts: 3
+  jobTimeout: 15m
+  maxImageBytes: 10485760
+  pollInterval: 2s
+  janitorInterval: 10m
+
+# -- Company Word template applied to every generated document.
+#
+# A .docx/.dotx is binary, so it lives in a ConfigMap's binaryData or in a
+# Secret. Create one first, for example:
+#   kubectl create configmap company-template --from-file=template.dotx=./acme.dotx
+wordTemplate:
+  enabled: false
+  existingConfigMap: ""
+  existingSecret: ""
+  key: template.dotx
+  mountPath: /etc/confluence-to-doc
+
+# -- OpenTelemetry. Disabled until an OTLP endpoint is set.
+telemetry:
+  enabled: false
+  endpoint: ""
+  protocol: grpc # grpc | http/protobuf
+  serviceName: confluence-to-doc
+  # Head sampling ratio for root spans.
+  sampleRatio: 1
+  metricExportInterval: 1m
+  # Prefix for this application's own metrics; semantic-convention metrics
+  # keep their standard names.
+  metricPrefix: ""
+  # Identity carried by every metric and span. This is how you tag the owning
+  # application and team.
+  resourceAttributes: {}
+  #  service.namespace: docs-platform
+  #  team: platform
+  #  deployment.environment: production
+
+logging:
+  level: info
+  format: json
+
+# -- Anything not covered above, added to both deployments.
+extraEnv: []
+#  - name: SOFFICE_PATH
+#    value: /usr/bin/soffice
+extraEnvFrom: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA / workload identity goes here.
+  annotations: {}
+  automountServiceAccountToken: false
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: confluence-to-doc.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# -- API pods: serve the SPA and the REST API.
+api:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+# -- Worker pods: crawl Confluence and run LibreOffice.
+#
+# Disable them and the API takes the work on itself (APP_ROLE=all), which suits
+# a small installation with filesystem storage.
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 500m
+      # LibreOffice is the memory-hungry part of an export.
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  # An in-flight export gets 20 s to finish on shutdown, plus the server's own
+  # drain; give the pod room to do that before it is killed.
+  terminationGracePeriodSeconds: 60
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  # LibreOffice only writes to /tmp and $HOME, both mounted as emptyDir.
+  readOnlyRootFilesystem: true
+
+# Scratch space for LibreOffice; an export is written here before it is stored.
+tmpVolume:
+  sizeLimit: 2Gi

@@ -1,0 +1,43 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} is installed as {{ .Release.Name }}.
+
+{{ if .Values.ingress.enabled -}}
+Reachable at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else -}}
+No ingress is enabled. To try it out:
+  kubectl port-forward svc/{{ include "confluence-to-doc.fullname" . }} 8080:{{ .Values.service.port }}
+{{- end }}
+
+Check the rollout:
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl logs -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=api --tail=20
+
+Things worth confirming on a first install:
+
+1. The OIDC client must allow {{ .Values.publicUrl }}/auth/callback as a redirect URI,
+   and {{ .Values.publicUrl }}/ as a post-logout redirect URI.
+
+2. Database migrations run at startup, from whichever pod gets there first; they
+   are guarded by an advisory lock, so several replicas are safe.
+
+3. {{ if eq .Values.storage.type "s3" }}Documents go to the S3 bucket {{ .Values.storage.s3.bucket }}.
+   The pods need s3:ListBucket, s3:PutObject, s3:GetObject and s3:DeleteObject{{ if not .Values.storage.s3.accessKeyId }},
+   granted through the service account ({{ include "confluence-to-doc.serviceAccountName" . }}){{ end }}.
+   The bucket is checked at startup: a pod that cannot reach it will not become ready.
+{{- else }}Documents go to the {{ .Values.storage.filesystem.path }} volume.
+   {{ if .Values.worker.enabled }}API and worker pods share it, so it must really be ReadWriteMany.
+   {{- else }}Only the API pod runs, so a ReadWriteOnce volume is enough — but a single replica too.{{ end }}
+{{- end }}
+
+4. {{ if .Values.wordTemplate.enabled }}Documents use the company Word template from
+   {{ if .Values.wordTemplate.existingConfigMap }}ConfigMap {{ .Values.wordTemplate.existingConfigMap }}{{ else }}Secret {{ .Values.wordTemplate.existingSecret }}{{ end }}.
+   A template the application cannot read stops the pod at startup, on purpose.
+{{- else }}No company Word template is configured; documents use the built-in styling.
+   See docs/word-template.md to add one.
+{{- end }}
+
+5. {{ if .Values.telemetry.enabled }}Traces and metrics go to {{ .Values.telemetry.endpoint }}.
+{{- else }}Telemetry is off. Set telemetry.enabled and telemetry.endpoint to export traces and metrics.
+{{- end }}

@@ -1,0 +1,13 @@
+{{- if .Values.api.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "confluence-to-doc.fullname" . }}-api
+  labels: {{- include "confluence-to-doc.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.api.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "confluence-to-doc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}

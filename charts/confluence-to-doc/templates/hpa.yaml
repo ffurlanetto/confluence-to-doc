@@ -1,0 +1,27 @@
+{{- range $component := list "api" "worker" }}
+{{- $values := index $.Values $component }}
+{{- if and $values.autoscaling.enabled (or (eq $component "api") $.Values.worker.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "confluence-to-doc.fullname" $ }}-{{ $component }}
+  labels:
+    {{- include "confluence-to-doc.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "confluence-to-doc.fullname" $ }}-{{ $component }}
+  minReplicas: {{ $values.autoscaling.minReplicas }}
+  maxReplicas: {{ $values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $values.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- end }}

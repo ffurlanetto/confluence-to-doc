@@ -1,0 +1,131 @@
+# Example values for a production install.
+#
+#   helm upgrade --install confluence-to-doc ./charts/confluence-to-doc \
+#     -n confluence-to-doc --create-namespace \
+#     -f charts/confluence-to-doc/values-production.yaml
+#
+# Every secret here is referenced, never written: create them first.
+#
+#   kubectl -n confluence-to-doc create secret generic c2d-database \
+#     --from-literal=DATABASE_URL='postgres://c2d:…@postgres.example.com:5432/c2d?sslmode=require'
+#   kubectl -n confluence-to-doc create secret generic c2d-oidc \
+#     --from-literal=OIDC_CLIENT_SECRET='…'
+#   kubectl -n confluence-to-doc create secret generic c2d-encryption \
+#     --from-literal=ENCRYPTION_KEY="$(openssl rand -base64 32)"
+#   kubectl -n confluence-to-doc create configmap c2d-word-template \
+#     --from-file=template.dotx=./company-template.dotx
+#
+# Keep ENCRYPTION_KEY somewhere you can recover it: losing it means every user
+# has to enter their Confluence token again.
+
+image:
+  repository: ghcr.io/ffurlanetto/confluence-to-doc
+  tag: "0.1.0"
+
+publicUrl: https://confluence-export.example.com
+
+confluence:
+  baseUrl: https://confluence.example.com
+
+database:
+  existingSecret: c2d-database
+  existingSecretKey: DATABASE_URL
+
+oidc:
+  issuerUrl: https://keycloak.example.com/realms/corp
+  clientId: confluence-to-doc
+  existingSecret: c2d-oidc
+  existingSecretKey: OIDC_CLIENT_SECRET
+
+existingEncryptionKeySecret: c2d-encryption
+existingEncryptionKeySecretKey: ENCRYPTION_KEY
+
+# Object storage keeps API and worker pods independent: no shared volume.
+storage:
+  type: s3
+  s3:
+    bucket: acme-confluence-exports
+    region: eu-west-1
+    prefix: exports/
+    # No static keys: the pods authenticate through the service account below.
+
+# Documents come out in the company format, from a template you created in Word.
+wordTemplate:
+  enabled: true
+  existingConfigMap: c2d-word-template
+  key: template.dotx
+
+telemetry:
+  enabled: true
+  endpoint: http://opentelemetry-collector.observability.svc:4317
+  protocol: grpc
+  serviceName: confluence-to-doc
+  # Sample every root span; lower it if the collector cannot keep up.
+  sampleRatio: 1
+  # Identifies the owning application and team on every metric and span.
+  resourceAttributes:
+    service.namespace: docs-platform
+    team: platform
+    deployment.environment: production
+
+serviceAccount:
+  create: true
+  annotations:
+    # AWS IRSA; use the equivalent annotation on GKE or AKS.
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/confluence-to-doc
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    # Generated documents can be a few tens of MB.
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+  hosts:
+    - host: confluence-export.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: c2d-tls
+      hosts:
+        - confluence-export.example.com
+
+api:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+worker:
+  enabled: true
+  replicaCount: 2
+  # Each worker runs EXPORT_WORKER_CONCURRENCY LibreOffice conversions at once.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+export:
+  retention: 48h
+  workerConcurrency: 2
+  maxActivePerUser: 5
+  maxPages: 500
+
+logging:
+  level: info
+  format: json

@@ -1,0 +1,20 @@
+apiVersion: v2
+name: confluence-to-doc
+description: Export a Confluence page and its whole tree to Word or PDF, asynchronously.
+type: application
+# version is the chart version; appVersion tracks the application image tag.
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/ffurlanetto/confluence-to-doc
+sources:
+  - https://github.com/ffurlanetto/confluence-to-doc
+keywords:
+  - confluence
+  - export
+  - docx
+  - pdf
+maintainers:
+  - name: ffurlanetto
+annotations:
+  # The database is not bundled: point the chart at your managed PostgreSQL.
+  category: Productivity

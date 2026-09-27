@@ -1,0 +1,15 @@
+{{- if and (eq .Values.storage.type "filesystem") (not .Values.storage.filesystem.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "confluence-to-doc.pvcName" . }}
+  labels: {{- include "confluence-to-doc.labels" . | nindent 4 }}
+spec:
+  accessModes: {{- toYaml .Values.storage.filesystem.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.filesystem.size }}
+  {{- with .Values.storage.filesystem.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

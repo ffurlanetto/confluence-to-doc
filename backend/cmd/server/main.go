@@ -159,6 +159,10 @@ func run() error {
 			DocumentTemplate: templateName(template),
 		})
 		servers = append(servers, newServer(cfg.HTTPAddr, router))
+	} else {
+		// A worker serves no API, but an orchestrator still needs somewhere to
+		// send liveness and readiness probes.
+		servers = append(servers, newServer(cfg.HTTPAddr, healthHandler(db.Ping)))
 	}
 
 	errCh := make(chan error, len(servers))
@@ -215,6 +219,31 @@ func healthcheck() int {
 
 // newBlobStore is the storage feature flag: S3 when a bucket is configured,
 // local disk otherwise.
+// healthHandler exposes the probe endpoints on their own, for processes that
+// do not run the API.
+func healthHandler(ready func(context.Context) error) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusOK, "ok")
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := ready(ctx); err != nil {
+			writeStatus(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		writeStatus(w, http.StatusOK, "ready")
+	})
+	return mux
+}
+
+func writeStatus(w http.ResponseWriter, code int, status string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = fmt.Fprintf(w, `{"status":%q}`, status)
+}
+
 // templateName is the template file name shown in the API, empty when none.
 func templateName(t *docx.Template) string {
 	if t == nil {
