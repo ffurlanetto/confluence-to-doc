@@ -9,7 +9,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- Backend build --------------------------------------------------------
-FROM golang:1.26-bookworm AS api
+FROM golang:1.27-bookworm AS api
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
