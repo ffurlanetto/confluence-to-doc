@@ -62,6 +62,7 @@ func run() error {
 		ServiceVersion: version,
 		SampleRatio:    cfg.Telemetry.SampleRatio,
 		MetricInterval: cfg.Telemetry.MetricInterval,
+		MetricPrefix:   cfg.Telemetry.MetricPrefix,
 	})
 	if err != nil {
 		return err

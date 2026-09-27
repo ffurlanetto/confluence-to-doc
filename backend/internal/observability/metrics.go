@@ -16,6 +16,10 @@ import (
 // meterName identifies this application's own instrumentation.
 const meterName = "github.com/ffurlanetto/confluence-to-doc"
 
+// MetricNamespace prefixes the metrics this application defines itself, as
+// opposed to those emitted by instrumentation libraries.
+const MetricNamespace = "c2d."
+
 // Attribute keys shared by the metrics and the spans of this application.
 const (
 	AttrFormat   = attribute.Key("c2d.export.format")

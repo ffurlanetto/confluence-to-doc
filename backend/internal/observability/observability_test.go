@@ -168,3 +168,80 @@ func TestLogHandlerAddsTraceIDs(t *testing.T) {
 		t.Error("a log line outside a span must not carry a trace id")
 	}
 }
+
+// TestMetricPrefixView covers the rename and, just as importantly, that the
+// custom histogram boundaries advised at instrument creation survive it.
+func TestMetricPrefixView(t *testing.T) {
+	r := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(r),
+		sdkmetric.WithView(observability.MetricPrefixView("acme.")),
+	)
+	meter := provider.Meter("test")
+
+	counter, err := meter.Int64Counter("c2d.exports.created", metric.WithUnit("{export}"),
+		metric.WithDescription("Exports accepted into the queue."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	histogram, err := meter.Float64Histogram("c2d.export.duration", metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(1, 5, 15, 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A semantic-convention metric from an instrumentation library.
+	httpDuration, err := meter.Float64Histogram("http.server.request.duration", metric.WithUnit("s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	counter.Add(ctx, 1)
+	histogram.Record(ctx, 7)
+	httpDuration.Record(ctx, 0.1)
+
+	var rm metricdata.ResourceMetrics
+	if err := r.Collect(ctx, &rm); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]metricdata.Metrics{}
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			byName[m.Name] = m
+		}
+	}
+	for _, want := range []string{"acme.c2d.exports.created", "acme.c2d.export.duration"} {
+		if _, ok := byName[want]; !ok {
+			t.Errorf("metric %q missing; got %v", want, keysOf(byName))
+		}
+	}
+	if _, unprefixed := byName["c2d.exports.created"]; unprefixed {
+		t.Error("the unprefixed name must not be exported as well")
+	}
+	// Semantic-convention metrics keep their standard names: dashboards and
+	// backends rely on them, and services are told apart by resource
+	// attributes instead.
+	if _, ok := byName["http.server.request.duration"]; !ok {
+		t.Errorf("the semconv metric must keep its name; got %v", keysOf(byName))
+	}
+	if _, renamed := byName["acme.http.server.request.duration"]; renamed {
+		t.Error("a semantic-convention metric must not be renamed by the prefix")
+	}
+	if m := byName["acme.c2d.exports.created"]; m.Unit != "{export}" || m.Description == "" {
+		t.Errorf("unit and description must survive the rename: %+v", m)
+	}
+	hist, ok := byName["acme.c2d.export.duration"].Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("renamed histogram has type %T", byName["acme.c2d.export.duration"].Data)
+	}
+	if got := hist.DataPoints[0].Bounds; len(got) != 4 || got[0] != 1 || got[3] != 30 {
+		t.Errorf("custom bucket boundaries lost through the view: %v", got)
+	}
+}
+
+func keysOf(m map[string]metricdata.Metrics) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

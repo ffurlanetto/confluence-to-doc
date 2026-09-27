@@ -177,3 +177,45 @@ func TestTelemetryConfigValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricPrefixNormalisation(t *testing.T) {
+	cases := map[string]string{
+		"":       "",
+		"acme":   "acme.", // a separator is added when the operator omits it
+		"acme.":  "acme.", // an explicit separator is kept as written
+		"acme_":  "acme_", // including the Prometheus-style underscore
+		"acme-":  "acme-",
+		" acme ": "acme.", // surrounding blanks are ignored
+	}
+	for raw, want := range cases {
+		env := baseEnv()
+		env["TELEMETRY_METRIC_PREFIX"] = raw
+		cfg, err := load(getter(env))
+		if err != nil {
+			t.Fatalf("prefix %q: %v", raw, err)
+		}
+		if cfg.Telemetry.MetricPrefix != want {
+			t.Errorf("prefix %q normalised to %q, want %q", raw, cfg.Telemetry.MetricPrefix, want)
+		}
+	}
+}
+
+func TestMetricPrefixValidation(t *testing.T) {
+	for _, bad := range []string{"1acme", "acme corp", "acme/corp", "acme$"} {
+		env := baseEnv()
+		env["TELEMETRY_METRIC_PREFIX"] = bad
+		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), "TELEMETRY_METRIC_PREFIX") {
+			t.Errorf("prefix %q: want a validation error, got %v", bad, err)
+		}
+	}
+}
+
+// The prefix is independent of the OTLP endpoint: it is validated even when
+// telemetry is off, so a typo surfaces before the collector is wired up.
+func TestMetricPrefixValidatedWithTelemetryDisabled(t *testing.T) {
+	env := baseEnv()
+	env["TELEMETRY_METRIC_PREFIX"] = "bad prefix"
+	if _, err := load(getter(env)); err == nil {
+		t.Fatal("expected a validation error with telemetry disabled")
+	}
+}

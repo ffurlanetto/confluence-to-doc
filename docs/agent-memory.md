@@ -66,6 +66,27 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   the two.
 - The observable gauge callback swallows database errors on purpose: returning one marks the whole metric
   collection as failed.
+- `TELEMETRY_METRIC_PREFIX` renames metrics through an SDK **View**, and deliberately matches only names
+  under `observability.MetricNamespace` (`c2d.`). Semantic-convention metrics keep their names: those are
+  the contract dashboards rely on, and services are distinguished by resource attributes
+  (`service.name`, `service.namespace`, `OTEL_RESOURCE_ATTRIBUTES`) instead.
+- The view leaves `Stream.Aggregation` unset so each instrument keeps its default aggregation *and* the
+  bucket boundaries advised at creation — a test pins that down, because setting an aggregation there
+  would silently flatten the custom histogram buckets.
+- Resource attributes are not Prometheus labels by default: the collector's Prometheus exporter only
+  derives `job` from `service.namespace`/`service.name`. `resource_to_telemetry_conversion` promotes the
+  rest, at the cost of `host.name` and `telemetry.sdk.*` becoming labels too.
+- **Jaeger does not implement the OTLP metrics service.** Pointing the application straight at it makes
+  every metric export fail with `unknown service opentelemetry.proto.collector.metrics.v1.MetricsService`.
+  The dev stack therefore sends OTLP to a collector, which fans out to Jaeger and to its own log.
+
+### Local stack (compose)
+
+- `devmocks` joins the app's network namespace (`network_mode: service:app`). Restarting `app` alone
+  leaves devmocks attached to the dead namespace, the mock IdP becomes unreachable, and the app exits
+  after its OIDC retries. Recreate the stack instead of restarting a single container.
+- Pin image tags that exist: `jaegertracing/all-in-one:1.62` never did, and compose only fails at pull
+  time, which no CI job exercises.
 
 ### Queue and workers
 

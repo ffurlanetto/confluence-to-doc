@@ -38,9 +38,13 @@ Author it in Word like any normal document, then save as `.dotx` (or `.docx`):
 3. **Fonts and colours** — set them on the *styles*, not on loose text: change the **Normal** style for
    body text and **Heading 1** to **Heading 6** for titles. The export uses `Heading 1…6` for the page
    hierarchy and `Normal` for everything else.
+   Word's built-in heading styles already carry an **outline level**, which is what produces the Word
+   navigation pane and the PDF bookmarks. Keep using them rather than inventing look-alike styles: a
+   heading style without an outline level renders correctly but yields a PDF with no bookmarks.
 4. **Leave the body empty** (or with a placeholder): the template's own body content is discarded.
 
-A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`–`Heading 6` styles ✅.
+A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`–`Heading 6` styles
+(with outline levels) ✅.
 
 ### What to expect
 
@@ -52,6 +56,25 @@ A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`
   font win; it also means a style you did not define cannot be honoured.
 - Tables keep their visible borders from the export, not from a table style.
 - Bold, italics, code blocks and image sizes are direct formatting and are preserved.
+
+### Fonts in the PDF
+
+Word renders the DOCX with the fonts named by the template, which every workstation that has them will
+show correctly. The **PDF is rendered on the server**, so the corporate fonts must be installed in the
+image — otherwise LibreOffice silently substitutes a lookalike (Georgia becomes DejaVu Serif, for
+instance) and only the PDF looks off.
+
+Install them by extending the image:
+
+```dockerfile
+FROM confluence-to-doc:latest
+USER root
+COPY fonts/*.ttf /usr/share/fonts/truetype/corporate/
+RUN fc-cache -f
+USER app
+```
+
+Licensing is yours to check: many corporate typefaces may not be redistributed inside an image.
 
 ## Rolling it out
 
@@ -81,6 +104,8 @@ re-validated.
 | Titles do not use the company style             | The template defines translated style names but not the `Heading 1…6` style ids. Base the styles on Word's built-in headings rather than creating new ones. |
 | Body text keeps a generic font                  | The font was applied to text directly in the template instead of to the `Normal` style. |
 | Lists lose their bullets                        | The export brings its own list definitions; check the template's numbering is not corrupted by a Word add-in. |
+| The PDF has no bookmarks                        | The template's heading styles carry no outline level. Base them on Word's built-in `Heading 1…6`. |
+| The PDF uses the wrong font, the DOCX is fine   | The font is not installed in the image; see [Fonts in the PDF](#fonts-in-the-pdf). |
 
 If the template cannot be applied to a document, that export fails immediately with an explicit message
 rather than being retried — the failure is deterministic — and no half-formatted document is ever

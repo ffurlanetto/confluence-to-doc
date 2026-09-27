@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -45,6 +46,9 @@ type Config struct {
 	SampleRatio float64
 	// MetricInterval is how often metrics are pushed to the collector.
 	MetricInterval time.Duration
+	// MetricPrefix is prepended to this application's own metric names.
+	// Empty leaves the names untouched.
+	MetricPrefix string
 }
 
 // Telemetry owns the providers; Shutdown flushes them.
@@ -107,17 +111,22 @@ func Setup(ctx context.Context, cfg Config) (*Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("observability: OTLP metric exporter: %w", err)
 	}
-	meterProvider := sdkmetric.NewMeterProvider(
+	metricOptions := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
 			sdkmetric.WithInterval(cfg.MetricInterval))),
-	)
+	}
+	if cfg.MetricPrefix != "" {
+		metricOptions = append(metricOptions, sdkmetric.WithView(MetricPrefixView(cfg.MetricPrefix)))
+	}
+	meterProvider := sdkmetric.NewMeterProvider(metricOptions...)
 	otel.SetMeterProvider(meterProvider)
 	t.shutdown = append(t.shutdown, meterProvider.Shutdown)
 
 	slog.Info("telemetry: OpenTelemetry enabled",
 		"endpoint", cfg.Endpoint, "protocol", cfg.Protocol,
-		"service", cfg.ServiceName, "sample_ratio", cfg.SampleRatio)
+		"service", cfg.ServiceName, "sample_ratio", cfg.SampleRatio,
+		"metric_prefix", cfg.MetricPrefix)
 	return t, nil
 }
 
@@ -133,6 +142,30 @@ func newMetricExporter(ctx context.Context, protocol string) (sdkmetric.Exporter
 		return otlpmetricgrpc.New(ctx)
 	}
 	return otlpmetrichttp.New(ctx)
+}
+
+// MetricPrefixView prepends prefix to this application's own metrics.
+//
+// Metrics that follow the OpenTelemetry semantic conventions — everything the
+// instrumentation libraries emit, such as http.server.request.duration — are
+// deliberately left alone: their names are the contract backends and dashboards
+// rely on, and a service is meant to be told apart by its resource attributes
+// (service.name, service.namespace, and whatever OTEL_RESOURCE_ATTRIBUTES adds)
+// rather than by renaming standard instruments.
+//
+// Aggregation is left unset so each instrument keeps the default for its kind,
+// including the bucket boundaries advised at creation.
+func MetricPrefixView(prefix string) sdkmetric.View {
+	return func(i sdkmetric.Instrument) (sdkmetric.Stream, bool) {
+		if !strings.HasPrefix(i.Name, MetricNamespace) {
+			return sdkmetric.Stream{}, false
+		}
+		return sdkmetric.Stream{
+			Name:        prefix + i.Name,
+			Description: i.Description,
+			Unit:        i.Unit,
+		}, true
+	}
 }
 
 // Shutdown flushes pending spans and metrics. It is safe to call when

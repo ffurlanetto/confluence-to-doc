@@ -56,6 +56,8 @@ the application pushes to a collector.
 | `OTEL_SERVICE_NAME`            | `confluence-to-doc` | Service name reported to the backend                    |
 | `OTEL_TRACES_SAMPLER_ARG`      | `1`                 | Head sampling ratio for root spans, between 0 and 1     |
 | `OTEL_METRIC_EXPORT_INTERVAL`  | `1m`                | How often metrics are pushed                            |
+| `TELEMETRY_METRIC_PREFIX`      | _(empty)_           | Prepended to this application's own metric names        |
+| `OTEL_RESOURCE_ATTRIBUTES`     | _(empty)_           | Identity carried by every signal, e.g. `team=platform`  |
 
 Every other standard `OTEL_*` variable — `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_CERTIFICATE`,
 `OTEL_EXPORTER_OTLP_COMPRESSION`, `OTEL_RESOURCE_ATTRIBUTES` (to add `deployment.environment`, for
@@ -63,16 +65,67 @@ example) — is read directly by the OTLP exporters, so anything your collector 
 
 ### What is exported
 
-**Metrics** (`c2d.*`, plus `http.server.*` from the HTTP instrumentation):
+**Metrics** — five of this application's own, plus the HTTP instrumentation's:
 
-| Metric                   | Type      | Attributes                | Meaning                            |
-| ------------------------ | --------- | ------------------------- | ---------------------------------- |
-| `c2d.exports.created`    | counter   | format                    | Exports accepted into the queue    |
-| `c2d.exports.finished`   | counter   | format, outcome           | Attempts finished (succeeded, retry, failed) |
-| `c2d.export.duration`    | histogram | format                    | End-to-end generation time (s)     |
-| `c2d.export.pages`       | histogram | format                    | Pages per successful export        |
-| `c2d.queue.exports`      | gauge     | state (queued \| running) | Current queue depth                |
-| `http.server.request.duration` | histogram | method, route, status | HTTP latency                       |
+| Metric                           | Type      | Unit       | Attributes                                 |
+| -------------------------------- | --------- | ---------- | ------------------------------------------ |
+| `c2d.exports.created`            | counter   | `{export}` | `c2d.export.format`                        |
+| `c2d.exports.finished`           | counter   | `{export}` | `c2d.export.format`, `c2d.export.outcome`  |
+| `c2d.export.duration`            | histogram | `s`        | `c2d.export.format`                        |
+| `c2d.export.pages`               | histogram | `{page}`   | `c2d.export.format`                        |
+| `c2d.queue.exports`              | gauge     | `{export}` | `c2d.queue.state`                          |
+| `http.server.request.duration`   | histogram | `s`        | semconv, including `http.route`            |
+| `http.server.request.body.size`  | histogram | `By`       | semconv, including `http.route`            |
+| `http.server.response.body.size` | histogram | `By`       | semconv, including `http.route`            |
+| `http.client.request.duration`   | histogram | `s`        | semconv (outbound Confluence calls)        |
+| `http.client.request.body.size`  | histogram | `By`       | semconv (outbound Confluence calls)        |
+
+Attribute values: `c2d.export.format` is `pdf` or `docx`; `c2d.export.outcome` is `succeeded`, `retry` or
+`failed`; `c2d.queue.state` is `queued` or `running`. Server-side HTTP metrics carry `http.route` as the
+route pattern (`/api/exports/{exportID}/download`), which keeps cardinality bounded. Every metric also
+carries the resource attributes: `service.name`, `service.version`, `host.name`, and whatever
+`OTEL_RESOURCE_ATTRIBUTES` adds.
+
+#### Identifying the application and the team
+
+Use resource attributes — that is what they are for, and they land on **every** signal, metrics and traces
+alike, without touching a single metric name:
+
+```bash
+OTEL_SERVICE_NAME=confluence-to-doc
+OTEL_RESOURCE_ATTRIBUTES="service.namespace=docs-platform,team=platform,deployment.environment=prod"
+```
+
+`service.namespace` and `team` are the conventional way to answer "whose service is this?". Nothing in the
+application reads these variables: the OpenTelemetry SDK does, so any attribute you add is carried along.
+
+How they surface depends on the backend. With the collector's Prometheus exporter, resource attributes are
+**not** labels by default — you only get `job="docs-platform/confluence-to-doc"`, built from
+`service.namespace` and `service.name`. Promote them when you want to query by team:
+
+```yaml
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true   # team, deployment_environment… become labels on every series
+```
+
+That promotes *all* resource attributes, `host.name` and the `telemetry.sdk.*` trio included, so drop the
+ones you do not want with a `resource` processor rather than paying for their cardinality.
+
+#### Prefixing the metric names
+
+`TELEMETRY_METRIC_PREFIX=acme` renames this application's own metrics — `acme.c2d.exports.created` — and
+**leaves the semantic-convention ones alone**: `http.server.request.duration` keeps its standard name,
+because that name is the contract your dashboards and backends rely on, and because a service is meant to
+be told apart by its resource attributes rather than by renamed instruments.
+
+A separator is added when you omit one; `acme.`, `acme_` and `acme-` are taken as written. An invalid
+prefix is rejected at startup, even when telemetry is disabled.
+
+It is not an `OTEL_*` variable on purpose: the specification defines none, and squatting that namespace
+risks colliding with a future standard variable.
 
 **Traces**: one trace per HTTP request, and one per export job — the job is a separate trace because it
 runs long after the request that queued it. Inside a job you get `confluence.crawl`, `document.render`,
@@ -84,7 +137,14 @@ Spans carry `c2d.export.id`, so a failing export can be found from its identifie
 
 ### Trying it locally
 
-`make up` starts a Jaeger instance alongside the stack; run an export and open <http://localhost:16686>.
+`make up` starts an OpenTelemetry Collector and a Jaeger alongside the stack, the same shape as a real
+deployment: the application speaks OTLP to the collector, which forwards traces to Jaeger and logs metrics.
+
+- Traces: run an export, then open <http://localhost:16686>.
+- Metrics: `podman compose logs otel-collector` (or `docker compose logs`).
+
+Jaeger stores traces only — it does not implement the OTLP metrics service — which is why the collector
+sits in front of it.
 
 ## Company Word template
 

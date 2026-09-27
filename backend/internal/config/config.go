@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,9 @@ type TelemetryConfig struct {
 	ServiceName    string
 	SampleRatio    float64
 	MetricInterval time.Duration
+	// MetricPrefix is prepended to every metric name (empty = no prefix). It
+	// is not an OTEL_* variable because the specification defines none.
+	MetricPrefix string
 }
 
 // Enabled is the telemetry feature flag: an OTLP endpoint turns it on.
@@ -117,6 +121,21 @@ type ExportConfig struct {
 	WordTemplatePath string
 }
 
+// metricPrefixPattern keeps prefixes portable across metric backends; the
+// trailing separator added by metricPrefix is allowed here too.
+var metricPrefixPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)
+
+// metricPrefix appends a separator when the operator did not write one, so
+// TELEMETRY_METRIC_PREFIX=acme yields "acme.exports.created" rather than
+// "acmeexports.created".
+func metricPrefix(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasSuffix(raw, ".") || strings.HasSuffix(raw, "_") || strings.HasSuffix(raw, "-") {
+		return raw
+	}
+	return raw + "."
+}
+
 // Load reads the configuration from the environment.
 func Load() (*Config, error) { return load(os.Getenv) }
 
@@ -160,6 +179,7 @@ func load(getenv func(string) string) (*Config, error) {
 		ServiceName:    e.str("OTEL_SERVICE_NAME", "confluence-to-doc"),
 		SampleRatio:    e.float("OTEL_TRACES_SAMPLER_ARG", 1),
 		MetricInterval: e.duration("OTEL_METRIC_EXPORT_INTERVAL", time.Minute),
+		MetricPrefix:   metricPrefix(e.str("TELEMETRY_METRIC_PREFIX", "")),
 	}
 	cfg.S3 = S3Config{
 		Bucket:          e.str("S3_BUCKET", ""),
@@ -218,6 +238,9 @@ func (c *Config) validate() error {
 		if c.Telemetry.SampleRatio < 0 || c.Telemetry.SampleRatio > 1 {
 			errs = append(errs, errors.New("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1"))
 		}
+	}
+	if p := c.Telemetry.MetricPrefix; p != "" && !metricPrefixPattern.MatchString(p) {
+		errs = append(errs, fmt.Errorf("TELEMETRY_METRIC_PREFIX: %q must start with a letter and use only letters, digits, '.', '_' or '-'", p))
 	}
 	if c.S3.Enabled() {
 		if (c.S3.AccessKeyID == "") != (c.S3.SecretAccessKey == "") {
