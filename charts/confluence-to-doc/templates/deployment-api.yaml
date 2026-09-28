@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "confluence-to-doc.fullname" . }}-api
+  labels:
+    {{- include "confluence-to-doc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if not .Values.api.autoscaling.enabled }}
+  replicas: {{ .Values.api.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "confluence-to-doc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    {{- /* Without workers the API takes the exports on itself. */ -}}
+    {{- $role := ternary "api" "all" .Values.worker.enabled }}
+    {{- include "confluence-to-doc.podTemplate" (dict "ctx" . "component" "api" "role" $role) | nindent 4 }}

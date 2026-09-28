@@ -12,12 +12,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/exporter"
-	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/observability"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 )
@@ -31,6 +36,9 @@ type WorkerConfig struct {
 	MaxPages          int
 	MaxImageBytes     int64
 	ConfluenceWorkers int
+	// UseTemplateStyles tells the renderer to leave typography to the
+	// company Word template instead of styling the document itself.
+	UseTemplateStyles bool
 	// ShutdownGrace is how long in-flight jobs may run after shutdown starts
 	// before being released back to the queue.
 	ShutdownGrace time.Duration
@@ -124,6 +132,18 @@ func (p *Pool) process(poolCtx context.Context, workerID string, job *domain.Exp
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(poolCtx), p.cfg.JobTimeout)
 	defer cancel()
 
+	// A job is its own trace: it is picked up long after — and independently
+	// of — the request that queued it. The export id ties the two together.
+	ctx, span := observability.Tracer().Start(ctx, "export.process",
+		trace.WithNewRoot(), trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			observability.AttrExportID.String(job.ID.String()),
+			observability.AttrFormat.String(string(job.Format)),
+			observability.AttrPageID.String(job.RootPageID),
+			attribute.Int("c2d.export.attempt", job.Attempts),
+		))
+	defer span.End()
+
 	if job.Attempts > job.MaxAttempts {
 		// Can only happen when workers repeatedly died while holding the job.
 		p.finish(ctx, log, job, workerID, errors.New("worker lost the job too many times"), false)
@@ -168,6 +188,10 @@ func (p *Pool) process(poolCtx context.Context, workerID string, job *domain.Exp
 	}()
 
 	key, size, pages, err := p.generate(ctx, job, func(d, t int) { done.Store(int64(d)); total.Store(int64(t)) })
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 	cancel()
 	<-hbDone
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(poolCtx), 10*time.Second)
@@ -193,9 +217,13 @@ func (p *Pool) process(poolCtx context.Context, workerID string, job *domain.Exp
 		p.discard(finishCtx, key)
 		return
 	}
-	metrics.ExportsFinished.WithLabelValues("succeeded").Inc()
-	metrics.ExportDuration.WithLabelValues(string(job.Format)).Observe(p.now().Sub(start).Seconds())
-	metrics.ExportPages.Observe(float64(pages))
+	formatAttr := metric.WithAttributes(observability.AttrFormat.String(string(job.Format)))
+	observability.ExportsFinished.Add(finishCtx, 1, metric.WithAttributes(
+		observability.AttrFormat.String(string(job.Format)),
+		observability.AttrOutcome.String("succeeded")))
+	observability.ExportDuration.Record(finishCtx, p.now().Sub(start).Seconds(), formatAttr)
+	observability.ExportPages.Record(finishCtx, int64(pages), formatAttr)
+	span.SetAttributes(attribute.Int("c2d.export.pages", pages), attribute.Int64("c2d.export.bytes", size))
 	log.Info("export succeeded", "pages", pages, "bytes", size, "duration", p.now().Sub(start).String())
 }
 
@@ -205,8 +233,10 @@ func (p *Pool) finish(ctx context.Context, log *slog.Logger, job *domain.Export,
 	if retry && job.Attempts < job.MaxAttempts {
 		outcome = "retry"
 	}
-	metrics.ExportsFinished.WithLabelValues(outcome).Inc()
-	log.Warn("export attempt failed", "err", cause, "outcome", outcome)
+	observability.ExportsFinished.Add(ctx, 1, metric.WithAttributes(
+		observability.AttrFormat.String(string(job.Format)),
+		observability.AttrOutcome.String(outcome)))
+	log.WarnContext(ctx, "export attempt failed", "err", cause, "outcome", outcome)
 	if err := p.repo.FailExport(ctx, job.ID, workerID, UserMessage(cause), retry, delay, p.cfg.Retention); err != nil &&
 		!errors.Is(err, store.ErrLeaseLost) {
 		log.Error("recording export failure", "err", err)
@@ -226,28 +256,41 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	if err != nil {
 		return "", 0, 0, err
 	}
-	root, err := exporter.BuildTree(ctx, client, job.RootPageID, exporter.TreeOptions{
+	crawlCtx, crawlSpan := observability.Start(ctx, "confluence.crawl",
+		observability.AttrPageID.String(job.RootPageID))
+	root, err := exporter.BuildTree(crawlCtx, client, job.RootPageID, exporter.TreeOptions{
 		IncludeChildren: job.IncludeChildren,
 		MaxPages:        p.cfg.MaxPages,
 		Concurrency:     p.cfg.ConfluenceWorkers,
 		OnProgress:      func(n int) { progress(0, n) },
 	})
 	if err != nil {
+		observability.End(crawlSpan, err)
 		return "", 0, 0, err
 	}
 	pages := root.Count()
+	crawlSpan.SetAttributes(attribute.Int("c2d.export.pages", pages))
+	observability.End(crawlSpan, nil)
 	progress(pages, pages)
 
-	html, err := exporter.RenderHTML(ctx, root, exporter.RenderOptions{
-		Title:       root.Page.Title,
-		SourceURL:   root.Page.WebURL,
-		GeneratedAt: p.now(),
+	renderCtx, renderSpan := observability.Start(ctx, "document.render")
+	html, err := exporter.RenderHTML(renderCtx, root, exporter.RenderOptions{
+		Title:             root.Page.Title,
+		SourceURL:         root.Page.WebURL,
+		GeneratedAt:       p.now(),
+		UseTemplateStyles: p.cfg.UseTemplateStyles,
 	}, exporter.ConfluenceAssets{Client: client, MaxImageBytes: p.cfg.MaxImageBytes})
 	if err != nil {
+		observability.End(renderSpan, err)
 		return "", 0, 0, err
 	}
+	renderSpan.SetAttributes(attribute.Int("c2d.document.html_bytes", len(html)))
+	observability.End(renderSpan, nil)
 
 	key := job.ID.String() + "." + job.Format.Extension()
+	ctx, convertSpan := observability.Start(ctx, "document.convert",
+		observability.AttrFormat.String(string(job.Format)))
+	defer convertSpan.End()
 	pr, pw := io.Pipe()
 	convErr := make(chan error, 1)
 	go func() {
@@ -272,7 +315,9 @@ func retryable(err error) bool {
 	switch {
 	case errors.Is(err, domain.ErrPATMissing),
 		errors.Is(err, exporter.ErrTooManyPages),
-		errors.Is(err, domain.ErrInvalidFormat):
+		errors.Is(err, domain.ErrInvalidFormat),
+		// A template that cannot be applied fails the same way every time.
+		errors.Is(err, docx.ErrApply):
 		return false
 	case errors.Is(err, context.DeadlineExceeded):
 		return false // the next attempt would most likely time out as well
@@ -285,18 +330,20 @@ func retryable(err error) bool {
 func UserMessage(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrPATMissing):
-		return "Aucun jeton d'accès Confluence (PAT) n'est configuré dans vos préférences."
+		return "No Confluence personal access token (PAT) is configured in your preferences."
 	case errors.Is(err, confluence.ErrUnauthorized):
-		return "Votre jeton d'accès Confluence (PAT) est invalide ou expiré. Mettez-le à jour dans vos préférences."
+		return "Your Confluence personal access token (PAT) is invalid or expired. Update it in your preferences."
 	case errors.Is(err, confluence.ErrForbidden):
-		return "Vous n'avez pas les droits nécessaires sur cette page Confluence."
+		return "You do not have the required permissions on this Confluence page."
 	case errors.Is(err, confluence.ErrNotFound):
-		return "La page Confluence est introuvable (supprimée ou non accessible)."
+		return "The Confluence page cannot be found (deleted or not accessible)."
 	case errors.Is(err, exporter.ErrTooManyPages):
-		return "L'arborescence contient trop de pages pour un seul export. Exportez une sous-branche."
+		return "The page tree contains too many pages for a single export. Export a sub-branch instead."
 	case errors.Is(err, context.DeadlineExceeded):
-		return "La génération a dépassé le temps maximum autorisé."
+		return "Generation exceeded the maximum allowed time."
+	case errors.Is(err, docx.ErrApply):
+		return "The company Word template could not be applied. Contact your administrator."
 	default:
-		return "Une erreur technique est survenue pendant la génération du document."
+		return "A technical error occurred while generating the document."
 	}
 }

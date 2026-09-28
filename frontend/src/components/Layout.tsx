@@ -24,22 +24,22 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
         </Link>
         <nav aria-label="Navigation principale">
           <NavLink to="/" end>
-            Mes exports
+            My exports
           </NavLink>
-          <NavLink to="/new">Nouvel export</NavLink>
-          <NavLink to="/settings">Préférences</NavLink>
+          <NavLink to="/new">New export</NavLink>
+          <NavLink to="/settings">Preferences</NavLink>
         </nav>
         <div className="user">
           <span title={me.email}>{me.name || me.email}</span>
           <button type="button" className="link" onClick={() => void logout()}>
-            Se déconnecter
+            Sign out
           </button>
         </div>
       </header>
       {prefs.data && !prefs.data.hasPat && (
         <div className="banner" role="alert">
-          Aucun jeton d’accès Confluence n’est configuré.{' '}
-          <Link to="/settings">Ajoutez votre PAT dans les préférences</Link> pour pouvoir exporter.
+          No Confluence personal access token is configured.{' '}
+          <Link to="/settings">Add your PAT in the preferences</Link> to be able to export.
         </div>
       )}
       <main>{children}</main>

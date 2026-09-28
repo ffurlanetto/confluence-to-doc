@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -33,8 +34,6 @@ func (r Role) RunsWorker() bool { return r == RoleAll || r == RoleWorker }
 type Config struct {
 	Role     Role
 	HTTPAddr string
-	// MetricsAddr serves /metrics on a separate, non-public listener ("" disables it).
-	MetricsAddr string
 	// PublicURL is the externally visible base URL of the application
 	// (used to build the OAuth2 redirect URI and to check request origins).
 	PublicURL *url.URL
@@ -54,10 +53,29 @@ type Config struct {
 	ConfluenceTimeout time.Duration
 
 	Export ExportConfig
+	// Telemetry configures OpenTelemetry; it is enabled by an OTLP endpoint.
+	Telemetry TelemetryConfig
 	// S3 configures object storage for generated documents. It is enabled
 	// when S3_BUCKET is set; otherwise documents are stored on local disk.
 	S3 S3Config
 }
+
+// TelemetryConfig mirrors the standard OpenTelemetry environment variables we
+// act on. Everything else (headers, TLS, compression, timeouts) is read
+// directly by the OTLP exporters.
+type TelemetryConfig struct {
+	Endpoint       string
+	Protocol       string
+	ServiceName    string
+	SampleRatio    float64
+	MetricInterval time.Duration
+	// MetricPrefix is prepended to every metric name (empty = no prefix). It
+	// is not an OTEL_* variable because the specification defines none.
+	MetricPrefix string
+}
+
+// Enabled is the telemetry feature flag: an OTLP endpoint turns it on.
+func (c TelemetryConfig) Enabled() bool { return c.Endpoint != "" }
 
 type S3Config struct {
 	Bucket string
@@ -98,6 +116,24 @@ type ExportConfig struct {
 	JanitorInterval   time.Duration
 	SofficePath       string
 	ConfluenceWorkers int
+	// WordTemplatePath points at a company Word template (.docx/.dotx)
+	// applied to every generated document. Empty means default styling.
+	WordTemplatePath string
+}
+
+// metricPrefixPattern keeps prefixes portable across metric backends; the
+// trailing separator added by metricPrefix is allowed here too.
+var metricPrefixPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]*$`)
+
+// metricPrefix appends a separator when the operator did not write one, so
+// TELEMETRY_METRIC_PREFIX=acme yields "acme.exports.created" rather than
+// "acmeexports.created".
+func metricPrefix(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasSuffix(raw, ".") || strings.HasSuffix(raw, "_") || strings.HasSuffix(raw, "-") {
+		return raw
+	}
+	return raw + "."
 }
 
 // Load reads the configuration from the environment.
@@ -109,7 +145,6 @@ func load(getenv func(string) string) (*Config, error) {
 	cfg := &Config{
 		Role:        Role(e.str("APP_ROLE", string(RoleAll))),
 		HTTPAddr:    e.str("HTTP_ADDR", ":8080"),
-		MetricsAddr: e.str("METRICS_ADDR", ":9090"),
 		StaticDir:   e.str("STATIC_DIR", ""),
 		LogLevel:    e.str("LOG_LEVEL", "info"),
 		LogFormat:   e.str("LOG_FORMAT", "json"),
@@ -135,7 +170,16 @@ func load(getenv func(string) string) (*Config, error) {
 			JanitorInterval:   e.duration("EXPORT_JANITOR_INTERVAL", 10*time.Minute),
 			SofficePath:       e.str("SOFFICE_PATH", "soffice"),
 			ConfluenceWorkers: e.int("CONFLUENCE_FETCH_CONCURRENCY", 4),
+			WordTemplatePath:  e.str("WORD_TEMPLATE_PATH", ""),
 		},
+	}
+	cfg.Telemetry = TelemetryConfig{
+		Endpoint:       strings.TrimRight(e.str("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "/"),
+		Protocol:       e.str("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+		ServiceName:    e.str("OTEL_SERVICE_NAME", "confluence-to-doc"),
+		SampleRatio:    e.float("OTEL_TRACES_SAMPLER_ARG", 1),
+		MetricInterval: e.duration("OTEL_METRIC_EXPORT_INTERVAL", time.Minute),
+		MetricPrefix:   metricPrefix(e.str("TELEMETRY_METRIC_PREFIX", "")),
 	}
 	cfg.S3 = S3Config{
 		Bucket:          e.str("S3_BUCKET", ""),
@@ -181,6 +225,22 @@ func (c *Config) validate() error {
 	}
 	if c.Export.ConfluenceWorkers < 1 {
 		errs = append(errs, errors.New("CONFLUENCE_FETCH_CONCURRENCY must be >= 1"))
+	}
+	if c.Telemetry.Enabled() {
+		switch c.Telemetry.Protocol {
+		case "grpc", "http/protobuf":
+		default:
+			errs = append(errs, fmt.Errorf("OTEL_EXPORTER_OTLP_PROTOCOL: invalid value %q (want grpc or http/protobuf)", c.Telemetry.Protocol))
+		}
+		if u, err := url.Parse(c.Telemetry.Endpoint); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT: invalid absolute http(s) URL %q", c.Telemetry.Endpoint))
+		}
+		if c.Telemetry.SampleRatio < 0 || c.Telemetry.SampleRatio > 1 {
+			errs = append(errs, errors.New("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1"))
+		}
+	}
+	if p := c.Telemetry.MetricPrefix; p != "" && !metricPrefixPattern.MatchString(p) {
+		errs = append(errs, fmt.Errorf("TELEMETRY_METRIC_PREFIX: %q must start with a letter and use only letters, digits, '.', '_' or '-'", p))
 	}
 	if c.S3.Enabled() {
 		if (c.S3.AccessKeyID == "") != (c.S3.SecretAccessKey == "") {
@@ -229,6 +289,19 @@ func (e *envReader) int(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func (e *envReader) float(key string, def float64) float64 {
+	v := e.str(key, "")
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s: invalid number %q", key, v))
+		return def
+	}
+	return f
 }
 
 func (e *envReader) bool(key string, def bool) bool {

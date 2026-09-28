@@ -17,16 +17,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/config"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
-	"github.com/ffurlanetto/confluence-to-doc/backend/internal/metrics"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/observability"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 )
@@ -56,6 +55,29 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	telemetry, err := observability.Setup(ctx, observability.Config{
+		Endpoint:       cfg.Telemetry.Endpoint,
+		Protocol:       cfg.Telemetry.Protocol,
+		ServiceName:    cfg.Telemetry.ServiceName,
+		ServiceVersion: version,
+		SampleRatio:    cfg.Telemetry.SampleRatio,
+		MetricInterval: cfg.Telemetry.MetricInterval,
+		MetricPrefix:   cfg.Telemetry.MetricPrefix,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Flush with a context of its own: ctx is already cancelled here. The
+		// timeout stays short so an unreachable collector cannot hold up the
+		// shutdown, which already budgets time for in-flight servers and jobs.
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetry.Shutdown(flushCtx); err != nil {
+			slog.Error("flushing telemetry", "err", err)
+		}
+	}()
+
 	db, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -75,11 +97,26 @@ func run() error {
 	}
 	accounts := account.NewService(db, sealer, cfg.ConfluenceBaseURL, cfg.ConfluenceTimeout)
 
+	// The company Word template is validated at startup: a broken template
+	// must stop the process, not every export.
+	var template *docx.Template
+	if path := cfg.Export.WordTemplatePath; path != "" {
+		template, err = docx.LoadTemplate(path)
+		if err != nil {
+			return err
+		}
+		slog.Info("document template: company Word template", "file", template.Name(),
+			"default_paragraph_style", template.DefaultParagraphStyle(), "styles", len(template.Styles()))
+	} else {
+		slog.Info("document template: built-in styling")
+	}
+
 	var wg sync.WaitGroup
 	var notify func()
 
 	if cfg.Role.RunsWorker() {
-		pool := export.NewPool(db, accounts, converter.LibreOffice{Binary: cfg.Export.SofficePath}, blobs, export.WorkerConfig{
+		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Template: template}
+		pool := export.NewPool(db, accounts, conv, blobs, export.WorkerConfig{
 			Concurrency:       cfg.Export.WorkerConcurrency,
 			PollInterval:      cfg.Export.PollInterval,
 			JobTimeout:        cfg.Export.JobTimeout,
@@ -88,6 +125,7 @@ func run() error {
 			MaxPages:          cfg.Export.MaxPages,
 			MaxImageBytes:     cfg.Export.MaxImageBytes,
 			ConfluenceWorkers: cfg.Export.ConfluenceWorkers,
+			UseTemplateStyles: template != nil,
 			ShutdownGrace:     20 * time.Second,
 		})
 		notify = pool.Notify
@@ -97,30 +135,34 @@ func run() error {
 		go func() { defer wg.Done(); janitor.Run(ctx) }()
 	}
 
-	var servers []*http.Server
-	if cfg.MetricsAddr != "" {
-		reg := metrics.NewRegistry(db.QueueStats)
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		servers = append(servers, newServer(cfg.MetricsAddr, mux))
+	if telemetry.Enabled {
+		if err := observability.RegisterQueueDepth(db.QueueStats); err != nil {
+			return fmt.Errorf("registering queue metrics: %w", err)
+		}
 	}
 
+	var servers []*http.Server
 	if cfg.Role.RunsAPI() {
 		authenticator, err := connectOIDC(ctx, cfg, db, sealer)
 		if err != nil {
 			return err
 		}
 		router := httpapi.NewRouter(httpapi.Deps{
-			Auth:      authenticator,
-			Accounts:  accounts,
-			Exports:   export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
-			Ready:     db.Ping,
-			PublicURL: cfg.PublicURL,
-			StaticDir: cfg.StaticDir,
-			Retention: cfg.Export.Retention,
-			MaxPages:  cfg.Export.MaxPages,
+			Auth:             authenticator,
+			Accounts:         accounts,
+			Exports:          export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
+			Ready:            db.Ping,
+			PublicURL:        cfg.PublicURL,
+			StaticDir:        cfg.StaticDir,
+			Retention:        cfg.Export.Retention,
+			MaxPages:         cfg.Export.MaxPages,
+			DocumentTemplate: templateName(template),
 		})
 		servers = append(servers, newServer(cfg.HTTPAddr, router))
+	} else {
+		// A worker serves no API, but an orchestrator still needs somewhere to
+		// send liveness and readiness probes.
+		servers = append(servers, newServer(cfg.HTTPAddr, healthHandler(db.Ping)))
 	}
 
 	errCh := make(chan error, len(servers))
@@ -177,6 +219,39 @@ func healthcheck() int {
 
 // newBlobStore is the storage feature flag: S3 when a bucket is configured,
 // local disk otherwise.
+// healthHandler exposes the probe endpoints on their own, for processes that
+// do not run the API.
+func healthHandler(ready func(context.Context) error) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusOK, "ok")
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := ready(ctx); err != nil {
+			writeStatus(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		writeStatus(w, http.StatusOK, "ready")
+	})
+	return mux
+}
+
+func writeStatus(w http.ResponseWriter, code int, status string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = fmt.Fprintf(w, `{"status":%q}`, status)
+}
+
+// templateName is the template file name shown in the API, empty when none.
+func templateName(t *docx.Template) string {
+	if t == nil {
+		return ""
+	}
+	return t.Name()
+}
+
 func newBlobStore(ctx context.Context, cfg *config.Config) (storage.BlobStore, error) {
 	if !cfg.S3.Enabled() {
 		slog.Info("document storage: local disk", "dir", cfg.Export.StorageDir)
@@ -242,5 +317,7 @@ func setupLogger(cfg *config.Config) {
 	} else {
 		h = slog.NewJSONHandler(os.Stdout, opts)
 	}
-	slog.SetDefault(slog.New(h))
+	// Logs emitted inside a span carry its trace and span ids, so a log line
+	// can be followed into the trace and back.
+	slog.SetDefault(slog.New(observability.LogHandler{Handler: h}))
 }

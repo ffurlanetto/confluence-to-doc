@@ -1,32 +1,33 @@
-# ADR 0005 — Stockage S3 activé par configuration
+# ADR 0005 — S3 storage enabled by configuration
 
-- Statut : accepté
-- Date : 2026-09-27
+- Status: accepted
+- Date: 2026-09-27
 
-## Contexte
+## Context
 
-Le stockage local impose un volume partagé (RWX) entre les instances API et worker, ce qui complique le
-déploiement multi-machines (Kubernetes, VM séparées). Le stockage objet S3 (ou compatible) lève cette contrainte.
-Il faut pouvoir basculer sans changer le code ni casser les déploiements existants.
+Local storage requires a shared (RWX) volume between API and worker instances, which complicates
+multi-machine deployments (Kubernetes, separate VMs). Object storage (S3 or compatible) removes that
+constraint. Switching had to be possible without code changes and without breaking existing deployments.
 
-## Décision
+## Decision
 
-- Deuxième implémentation de `storage.BlobStore` sur le SDK AWS Go v2 (standard, compatible avec les services
-  S3 tiers via `S3_ENDPOINT` + adressage path-style, chaîne d'identifiants IAM par défaut).
-- **Feature flag implicite** : `S3_BUCKET` défini → S3, sinon disque local. Pas de variable « mode » séparée,
-  pour éviter les états incohérents (mode S3 sans bucket).
-- Envoi : le flux est d'abord écrit dans un fichier temporaire puis envoyé en un seul `PutObject`
-  (corps rejouable de taille connue, aucun objet partiel en cas d'échec). Les gestionnaires de transfert du SDK
-  ont été écartés : `feature/s3/manager` est déprécié et son remplaçant `transfermanager` n'est pas stable (v0.x).
-- Lecture : `HeadObject` puis GET partiels paresseux, pour que `http.ServeContent` gère les requêtes `Range`.
-- Téléchargements toujours relayés par l'API (contrôle d'appartenance, en-têtes, bucket pouvant rester privé et
-  non exposé au navigateur), plutôt que des URL pré-signées.
-- Une suite de tests de contrat commune aux deux backends ; S3 simulé en mémoire (`gofakes3`, dépendance de test).
+- A second `storage.BlobStore` implementation on the AWS Go SDK v2 (standard, and compatible with
+  third-party S3 services through `S3_ENDPOINT` plus path-style addressing, with the default IAM
+  credential chain).
+- **Implicit feature flag**: `S3_BUCKET` set → S3, otherwise local disk. No separate “mode” variable, to
+  rule out inconsistent states (S3 mode without a bucket).
+- Upload: the stream is spooled to a temporary file, then sent as a single `PutObject` (replayable body of
+  known length, no partial object on failure). The SDK transfer helpers were rejected:
+  `feature/s3/manager` is deprecated and its replacement `transfermanager` is not stable (v0.x).
+- Download: `HeadObject` followed by lazy ranged GETs, so `http.ServeContent` can serve `Range` requests.
+- Downloads are always proxied by the API (ownership check, headers, bucket may stay private and unexposed
+  to browsers) rather than using pre-signed URLs.
+- One contract test suite covers both backends; S3 is faked in memory (`gofakes3`, a test-only dependency).
 
-## Conséquences
+## Consequences
 
-- ✅ API et workers peuvent être déployés sans volume partagé ; bucket vérifié dès le démarrage.
-- ✅ Déploiements existants inchangés (stockage local par défaut).
-- ⚠️ Les documents transitent par l'API au téléchargement (acceptable pour des fichiers de quelques Mo ;
-  des URL pré-signées pourront être ajoutées si le volume l'exige).
-- ⚠️ Un objet de plus de 5 Gio nécessiterait un envoi multipart (hors des volumes attendus).
+- ✅ API and workers can be deployed without a shared volume; the bucket is checked at startup.
+- ✅ Existing deployments are unchanged (local storage remains the default).
+- ⚠️ Documents flow through the API on download (fine for files of a few MB; pre-signed URLs can be added
+  if volume demands it).
+- ⚠️ An object larger than 5 GiB would need a multipart upload (well beyond expected sizes).

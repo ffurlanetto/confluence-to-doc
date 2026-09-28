@@ -1,23 +1,23 @@
-# ADR 0004 — Stockage des PAT Confluence
+# ADR 0004 — Storing Confluence PATs
 
-- Statut : accepté
-- Date : 2026-09-27
+- Status: accepted
+- Date: 2026-09-27
 
-## Contexte
+## Context
 
-Chaque utilisateur accède à Confluence avec son propre PAT, utilisé par les workers de façon asynchrone :
-le jeton doit donc être persisté.
+Each user reaches Confluence with their own personal access token, which workers use asynchronously, so
+the token has to be persisted.
 
-## Décision
+## Decision
 
-- L'URL Confluence est fixée par configuration (jamais saisie par l'utilisateur) : pas de SSRF, pas de fuite
-  du PAT vers un hôte arbitraire. Le client refuse d'envoyer le jeton à une autre origine, redirections comprises.
-- Le PAT est validé (`/rest/api/user/current`) avant enregistrement.
-- Il est chiffré en AES-256-GCM avec l'identifiant utilisateur comme donnée associée (une ligne copiée vers un
-  autre utilisateur est indéchiffrable) et n'est jamais renvoyé par l'API.
+- The Confluence URL comes from configuration only (never from user input): no SSRF, and no way to leak a
+  PAT to an arbitrary host. The client refuses to send the token to any other origin, redirects included.
+- The PAT is validated (`/rest/api/user/current`) before being stored.
+- It is encrypted with AES-256-GCM using the user id as associated data (a row copied to another user is
+  undecryptable) and is never returned by the API.
 
-## Conséquences
+## Consequences
 
-- ✅ Une fuite de la base seule ne révèle pas les PAT.
-- ⚠️ La clé `ENCRYPTION_KEY` doit être gérée comme un secret (coffre) ; sa rotation impose une ressaisie
-  (ou une future migration de rechiffrement grâce à l'octet de version du chiffré).
+- ✅ A database leak alone does not expose the PATs.
+- ⚠️ `ENCRYPTION_KEY` must be handled as a secret (vault); rotating it forces users to re-enter their token
+  (or a future re-encryption migration, which the version byte in the ciphertext leaves room for).

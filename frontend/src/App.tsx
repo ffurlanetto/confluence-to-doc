@@ -12,13 +12,13 @@ export function App() {
   const me = useMe();
 
   if (me.isLoading) {
-    return <p className="center">Chargement…</p>;
+    return <p className="center">Loading…</p>;
   }
   if (isUnauthenticated(me.error)) {
     return <LoginPage />;
   }
   if (!me.data) {
-    return <p className="center error">Le service est momentanément indisponible. Réessayez plus tard.</p>;
+    return <p className="center error">The service is temporarily unavailable. Try again later.</p>;
   }
 
   return (

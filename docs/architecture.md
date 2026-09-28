@@ -1,18 +1,18 @@
 # Architecture
 
-## Vue d'ensemble
+## Overview
 
-Un binaire Go unique embarque trois composants, activables via `APP_ROLE` :
+A single Go binary embeds three components, selected with `APP_ROLE`:
 
-| Rôle     | Composants                          | Mise à l'échelle                                   |
-| -------- | ----------------------------------- | -------------------------------------------------- |
-| `api`    | API REST, OIDC (BFF), SPA statique  | horizontale, sans état (sessions en base)          |
-| `worker` | pool de workers d'export + janitor  | horizontale ; `EXPORT_WORKER_CONCURRENCY` par pod  |
-| `all`    | les deux (défaut, idéal en dev)     | —                                                  |
+| Role     | Components                          | Scaling                                              |
+| -------- | ----------------------------------- | ---------------------------------------------------- |
+| `api`    | REST API, OIDC (BFF), static SPA    | horizontal, stateless (sessions live in the database) |
+| `worker` | export worker pool + janitor        | horizontal; `EXPORT_WORKER_CONCURRENCY` per pod       |
+| `all`    | both (default, ideal in development)| —                                                     |
 
-PostgreSQL est la seule dépendance d'infrastructure : données **et** file d'attente.
+PostgreSQL is the only infrastructure dependency: it holds both the data **and** the job queue.
 
-## Cycle de vie d'un export
+## Export lifecycle
 
 ```mermaid
 sequenceDiagram
@@ -22,102 +22,129 @@ sequenceDiagram
   participant W as Worker
   participant C as Confluence
   participant L as LibreOffice
-  participant S as Stockage
+  participant S as Storage
 
   U->>A: POST /api/exports {pageId, format, includeChildren}
-  A->>C: GET page (validation PAT + droits, titre)
-  A->>DB: INSERT exports (status=queued) si quota utilisateur OK
+  A->>C: GET page (validates the PAT, permissions and title)
+  A->>DB: INSERT exports (status=queued) if the user is under quota
   A-->>U: 202 Accepted
-  loop polling 2 s tant qu'un export est actif
+  loop polls every 2 s while an export is active
     U->>A: GET /api/exports
   end
-  W->>DB: UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED) → running + bail 1 min
-  W->>C: page racine + enfants (parcours concurrent borné)
-  W->>W: assemblage HTML (titres décalés, numérotation, TOC, images inline)
-  W->>L: soffice --convert-to pdf|docx
-  W->>S: écriture atomique <id>.<ext>
+  W->>DB: UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED) → running + 1 min lease
+  W->>C: root page + children (bounded concurrent crawl)
+  W->>W: HTML assembly (shifted headings, numbering, TOC, inlined images)
+  W->>L: soffice --convert-to docx
+  L-->>W: plain DOCX
+  W->>W: company Word template applied (when configured)
+  opt PDF requested
+    W->>L: soffice --convert-to pdf (from the templated DOCX)
+  end
+  W->>S: atomic write of <id>.<ext>
   W->>DB: status=succeeded, expires_at = now()+48h
   U->>A: GET /api/exports/{id}/download
-  A->>S: stream (Range supporté)
-  Note over W,S: Janitor (toutes les 10 min) : fichier supprimé, status=expired
+  A->>S: stream (Range supported)
+  Note over W,S: Janitor (every 10 min): file deleted, status=expired
 ```
 
-États : `queued → running → succeeded | failed → expired`. Un échec transitoire (5xx/429 Confluence,
-crash de conversion) repasse en `queued` avec backoff exponentiel jusqu'à `EXPORT_MAX_ATTEMPTS`.
-Les erreurs définitives (PAT invalide, page introuvable, arbre trop grand, timeout) échouent immédiatement.
+States: `queued → running → succeeded | failed → expired`. A transient failure (Confluence 5xx/429, a
+conversion crash) goes back to `queued` with exponential backoff up to `EXPORT_MAX_ATTEMPTS`. Deterministic
+failures (invalid PAT, page not found, tree too large, timeout, template that cannot be applied) fail
+immediately.
 
-## Contrôle de charge
+## Load control
 
-| Mécanisme                              | Paramètre                        |
+| Mechanism                              | Setting                          |
 | -------------------------------------- | -------------------------------- |
-| Workers simultanés par instance        | `EXPORT_WORKER_CONCURRENCY`      |
-| Requêtes Confluence parallèles par job | `CONFLUENCE_FETCH_CONCURRENCY`   |
-| Exports actifs par utilisateur (429)   | `EXPORT_MAX_ACTIVE_PER_USER`     |
-| Taille maximale d'un arbre             | `EXPORT_MAX_PAGES`               |
-| Durée maximale d'un job                | `EXPORT_JOB_TIMEOUT`             |
-| Taille maximale d'une image            | `EXPORT_MAX_IMAGE_BYTES`         |
-| Respect du `Retry-After` de Confluence | automatique (client REST)        |
+| Concurrent workers per instance        | `EXPORT_WORKER_CONCURRENCY`      |
+| Parallel Confluence requests per job   | `CONFLUENCE_FETCH_CONCURRENCY`   |
+| Active exports per user (429)          | `EXPORT_MAX_ACTIVE_PER_USER`     |
+| Maximum tree size                      | `EXPORT_MAX_PAGES`               |
+| Maximum job duration                   | `EXPORT_JOB_TIMEOUT`             |
+| Maximum image size                     | `EXPORT_MAX_IMAGE_BYTES`         |
+| Confluence `Retry-After` handling      | automatic (REST client)          |
 
-Robustesse de la file :
+Queue robustness:
 
-- **Bail (lease)** : un worker renouvelle `locked_until` toutes les 20 s. S'il meurt, le job est repris par un
-  autre worker après expiration du bail.
-- **Propriété** : toute écriture d'un worker est conditionnée à `locked_by = <worker>` ; un worker « zombie »
-  ne peut pas écraser le résultat d'un autre.
-- **Annulation** : supprimer un export en cours supprime la ligne ; le worker perd son bail, s'arrête et nettoie.
-- **Arrêt gracieux** : sur SIGTERM, les jobs en cours ont 20 s pour finir, sinon ils sont remis en file
-  sans consommer de tentative.
+- **Lease** — a worker refreshes `locked_until` every 20 s. If it dies, another worker picks the job up
+  once the lease expires.
+- **Ownership** — every worker write is conditioned on `locked_by = <worker>`, so a zombie worker cannot
+  overwrite another's result.
+- **Cancellation** — deleting a running export removes the row; the worker loses its lease, stops and
+  cleans up.
+- **Graceful shutdown** — on SIGTERM in-flight jobs get 20 s to finish, otherwise they return to the queue
+  without consuming an attempt.
 
-## Stockage des documents
+## Document rendering
 
-Les documents passent par l'interface `storage.BlobStore` (`Put`, `Open`, `Delete`), avec deux implémentations
-choisies par feature flag au démarrage (voir [configuration](configuration.md#stockage-des-documents-feature-flag-s3)) :
+`exporter.RenderHTML` produces one self-contained HTML document, which LibreOffice then converts:
 
-| Backend | Activation         | Particularités                                                                 |
-| ------- | ------------------ | ------------------------------------------------------------------------------ |
-| Local   | défaut             | écriture atomique (fichier temporaire + rename) ; volume partagé si API et workers sont séparés |
-| S3      | `S3_BUCKET` défini | envoi en un `PutObject` depuis un fichier temporaire (pas d'objet partiel) ; lecture paresseuse par GET partiels, donc les requêtes HTTP `Range` sont servies sans tout télécharger |
+- a cover page (title, date, source URL, page count) followed by a clickable table of contents;
+- every page starts on a new page, with an `hN` heading where `N = depth + 1` (capped at 6) and a
+  hierarchical number `1.2.3`;
+- headings inside a page body are shifted below its title, so the Word/PDF outline mirrors the tree;
+- images are downloaded with the user's PAT (same origin only), resized to the printable width and
+  embedded as data URIs; an unreachable image degrades to its alternative text;
+- links to pages included in the export become internal anchors, other links become absolute URLs;
+- sanitisation: scripts, iframes, forms and event handlers are removed.
 
-Une même suite de tests de contrat (`storage/contract_test.go`) s'exécute sur les deux backends
-(le S3 est simulé en mémoire par `gofakes3`).
+### Company Word template
 
-## Rendu du document
+When `WORD_TEMPLATE_PATH` is set, the document is produced inside the corporate template
+(`internal/docx`): the template package is the base of the result, and only the generated body is injected
+into it, with images, hyperlinks, list numbering and style references remapped to stay valid.
 
-`exporter.RenderHTML` produit un HTML autonome ensuite converti par LibreOffice :
+Two consequences shape the pipeline:
 
-- page de garde (titre, date, URL source, nombre de pages) puis table des matières cliquable ;
-- chaque page commence sur une nouvelle page, avec un titre `hN` où `N = profondeur + 1` (max 6)
-  et une numérotation hiérarchique `1.2.3` ;
-- les titres internes d'une page sont décalés sous le titre de la page → le plan Word/PDF reflète l'arbre ;
-- images téléchargées avec le PAT (même origine uniquement), redimensionnées à la largeur utile et
-  embarquées en data URI ; image inaccessible → texte alternatif ;
-- liens vers des pages incluses dans l'export → ancres internes ; autres liens → URL absolues ;
-- nettoyage : scripts, iframes, formulaires, gestionnaires d'événements supprimés.
+- the HTML is rendered **without** its own typography, because the converter would turn font declarations
+  into direct formatting that overrides the template's styles;
+- PDFs are produced from the templated DOCX rather than from the HTML, so both formats share one layout.
 
-## Sécurité
+Details and authoring guidance: [word-template.md](word-template.md).
 
-- **Authentification** : OIDC Authorization Code + PKCE + nonce, côté serveur (pattern BFF). Les jetons
-  OAuth ne quittent jamais le backend ; le navigateur n'a qu'un cookie de session opaque
-  (`HttpOnly`, `SameSite=Lax`, `Secure` + préfixe `__Host-` en HTTPS). Seul le SHA-256 est stocké.
-- **CSRF** : en-tête `X-CSRF-Protection: 1` obligatoire + vérification `Origin` / `Sec-Fetch-Site`.
-- **PAT** : validé auprès de Confluence avant enregistrement, chiffré AES-256-GCM avec l'id utilisateur en
-  donnée associée, jamais renvoyé par l'API, envoyé uniquement à l'origine Confluence configurée
-  (redirections vers un autre hôte bloquées).
-- **Autorisation** : toutes les requêtes d'export filtrent sur `user_id` (un export d'autrui = 404).
-  Les droits Confluence sont ceux du PAT de l'utilisateur.
-- **En-têtes** : CSP stricte (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, HSTS en HTTPS.
-- **Fichiers** : clés de stockage générées côté serveur et validées (pas de traversée de chemin),
-  écriture atomique, téléchargement `Content-Disposition: attachment`.
+## Document storage
 
-## Observabilité
+Documents go through the `storage.BlobStore` interface (`Put`, `Open`, `Delete`), with two implementations
+selected by a feature flag at startup (see [configuration](configuration.md#document-storage-s3-feature-flag)):
 
-- Logs JSON structurés (`log/slog`), un log par requête avec `request_id`.
-- `/healthz` (liveness), `/readyz` (base joignable).
-- Métriques Prometheus sur un port séparé (`METRICS_ADDR`, défaut `:9090`) :
-  `c2d_queue_queued`, `c2d_queue_running`, `c2d_exports_created_total`, `c2d_exports_finished_total{outcome}`,
-  `c2d_export_duration_seconds`, `c2d_export_pages`, `c2d_http_request_duration_seconds`.
+| Backend    | Enabled by       | Notes                                                                          |
+| ---------- | ---------------- | ------------------------------------------------------------------------------ |
+| Local disk | default          | atomic write (temp file + rename); needs a shared volume when API and workers are separate |
+| S3         | `S3_BUCKET` set  | single `PutObject` from a spooled temp file (no partial objects); lazy ranged GETs, so HTTP `Range` requests are served without downloading everything |
 
-## Évolutions envisagées
+One contract test suite (`storage/contract_test.go`) runs against both backends; S3 is faked in memory with
+`gofakes3`.
 
-- Confluence Cloud : authentification e-mail + API token (Basic) en plus du Bearer PAT.
-- Notification de fin d'export (e-mail, SSE) ; `LISTEN/NOTIFY` pour réveiller les workers distants.
+## Security
+
+- **Authentication** — OIDC Authorization Code + PKCE + nonce, server side (BFF pattern). OAuth tokens
+  never leave the backend; the browser only holds an opaque session cookie (`HttpOnly`, `SameSite=Lax`,
+  `Secure` + `__Host-` prefix over HTTPS). Only its SHA-256 is stored.
+- **CSRF** — a mandatory `X-CSRF-Protection: 1` header plus `Origin` / `Sec-Fetch-Site` checks.
+- **PAT** — validated against Confluence before being saved, encrypted with AES-256-GCM bound to the user
+  id, never returned by the API, and only ever sent to the configured Confluence origin (redirects to
+  another host are blocked).
+- **Authorisation** — every export query filters on `user_id` (another user's export looks like a 404).
+  Confluence permissions are those of the user's PAT.
+- **Headers** — strict CSP (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, HSTS over HTTPS.
+- **Files** — storage keys are generated and validated server-side (no path traversal), written
+  atomically, and served as `Content-Disposition: attachment`.
+
+## Observability
+
+- Structured JSON logs (`log/slog`), one line per request with a `request_id`.
+- `/healthz` (liveness), `/readyz` (database reachable).
+- OpenTelemetry traces and metrics pushed over OTLP, enabled by `OTEL_EXPORTER_OTLP_ENDPOINT`
+  (see [configuration](configuration.md#telemetry-opentelemetry)). An HTTP request is one trace; an export
+  job is another, with a span per pipeline stage — crawl, render, convert — and one per Confluence call.
+  Metrics cover the queue depth, export outcomes, durations and sizes.
+- Log lines emitted inside a span carry `trace_id` and `span_id`, which links the three signals.
+
+## Possible next steps
+
+- Link an export job's trace to the request that queued it, by storing the W3C trace context on the row
+  (a migration and a span link); today the export id is the connection between the two traces.
+
+- Confluence Cloud: email + API token (Basic) authentication alongside the Bearer PAT.
+- Export completion notifications (email, SSE); `LISTEN/NOTIFY` to wake remote workers.
+- Per-user or per-space template selection, on top of the current global template.

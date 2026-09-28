@@ -1,18 +1,19 @@
-## Pourquoi
+## Why
 
-<!-- Le problème résolu ou le besoin couvert. -->
+<!-- The problem being solved or the need being covered. -->
 
-## Quoi
+## What
 
-<!-- Les changements principaux. -->
+<!-- The main changes. -->
 
-## Comment tester
+## How to test
 
-<!-- Étapes manuelles éventuelles, en plus de `make check`. -->
+<!-- Any manual steps, in addition to `make check`. -->
 
 ## Checklist
 
-- [ ] `make check` passe en local
-- [ ] Tests ajoutés / mis à jour
-- [ ] Documentation (README, docs/, CLAUDE.md) à jour si nécessaire
-- [ ] Pas de secret ni de donnée personnelle dans le diff
+- [ ] `make check` passes locally
+- [ ] Tests added / updated
+- [ ] Documentation (README, docs/, CLAUDE.md, ADR) updated where needed
+- [ ] Everything written in English
+- [ ] No secret or personal data in the diff

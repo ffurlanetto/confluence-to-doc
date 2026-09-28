@@ -1,22 +1,23 @@
-# ADR 0001 — File d'attente dans PostgreSQL
+# ADR 0001 — Job queue in PostgreSQL
 
-- Statut : accepté
-- Date : 2026-09-27
+- Status: accepted
+- Date: 2026-09-27
 
-## Contexte
+## Context
 
-La génération des documents est longue (crawl Confluence + conversion) et doit être asynchrone, avec un
-mécanisme de file pour contenir la charge. Options : Redis (asynq), RabbitMQ, PostgreSQL.
+Document generation is slow (Confluence crawl plus conversion) and must be asynchronous, with a queue to
+keep the load in check. Options considered: Redis (asynq), RabbitMQ, PostgreSQL.
 
-## Décision
+## Decision
 
-Utiliser la table `exports` comme file : réservation via `SELECT … FOR UPDATE SKIP LOCKED`, bail renouvelable
-(`locked_until`), écritures conditionnées au propriétaire (`locked_by`), tentatives avec backoff.
+Use the `exports` table as the queue: jobs are claimed with `SELECT … FOR UPDATE SKIP LOCKED`, held with a
+renewable lease (`locked_until`), every write is conditioned on the owner (`locked_by`), and attempts use
+exponential backoff.
 
-## Conséquences
+## Consequences
 
-- ✅ Une seule dépendance d'infrastructure, transactions cohérentes entre l'état métier et la file,
-  quota par utilisateur vérifié atomiquement (verrou consultatif).
-- ✅ Tolérance aux pannes : un job abandonné est repris à l'expiration du bail.
-- ⚠️ Scrutation (2 s par défaut) ; suffisant pour ce volume. `LISTEN/NOTIFY` possible plus tard.
-- ⚠️ Pour des milliers de jobs/seconde, un broker dédié serait préférable (hors besoin actuel).
+- ✅ A single infrastructure dependency, consistent transactions between business state and the queue, and
+  a per-user quota checked atomically (advisory lock).
+- ✅ Fault tolerance: an abandoned job is picked up again when its lease expires.
+- ⚠️ Polling (2 s by default); fine at this volume. `LISTEN/NOTIFY` remains possible later.
+- ⚠️ For thousands of jobs per second a dedicated broker would be preferable (well beyond current needs).

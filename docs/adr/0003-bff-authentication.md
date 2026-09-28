@@ -1,22 +1,22 @@
-# ADR 0003 — Authentification OIDC côté serveur (BFF)
+# ADR 0003 — Server-side OIDC authentication (BFF)
 
-- Statut : accepté
-- Date : 2026-09-27
+- Status: accepted
+- Date: 2026-09-27
 
-## Contexte
+## Context
 
-L'application doit être protégée par OAuth2. Une SPA peut soit gérer elle-même les jetons (client public),
-soit déléguer au backend (Backend For Frontend).
+The application must be protected by OAuth2. A SPA can either handle tokens itself (public client) or
+delegate to the backend (Backend For Frontend).
 
-## Décision
+## Decision
 
-Le backend est un client OAuth2 **confidentiel** (Authorization Code + PKCE + nonce) ; il vérifie l'ID token,
-crée une session serveur et pose un cookie opaque `HttpOnly; SameSite=Lax` (`__Host-` + `Secure` en HTTPS).
-L'état du flux (state, nonce, verifier, return_to) voyage dans un cookie chiffré AES-GCM de courte durée.
-Les requêtes mutantes exigent un en-tête personnalisé (anti-CSRF).
+The backend is a **confidential** OAuth2 client (Authorization Code + PKCE + nonce); it verifies the ID
+token, creates a server-side session and sets an opaque `HttpOnly; SameSite=Lax` cookie (`__Host-` and
+`Secure` over HTTPS). The flow state (state, nonce, verifier, return_to) travels in a short-lived
+AES-GCM-encrypted cookie. State-changing requests require a custom header (CSRF defence).
 
-## Conséquences
+## Consequences
 
-- ✅ Aucun jeton accessible au JavaScript (résistance XSS), révocation immédiate des sessions (logout).
-- ✅ Compatible avec tout fournisseur OIDC standard ; déconnexion RP-initiated si `end_session_endpoint` existe.
-- ⚠️ La SPA et l'API doivent partager la même origine (le proxy Vite le garantit en développement).
+- ✅ No token is reachable from JavaScript (XSS resistance) and sessions can be revoked instantly (logout).
+- ✅ Works with any standards-compliant OIDC provider; RP-initiated logout when `end_session_endpoint` exists.
+- ⚠️ The SPA and the API must share an origin (the Vite proxy guarantees this in development).

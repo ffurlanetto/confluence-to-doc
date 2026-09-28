@@ -1,114 +1,139 @@
 # Confluence → Word / PDF
 
-Application web permettant à un utilisateur de choisir une page Confluence et de l'exporter
-**avec toutes ses pages enfants, en respectant l'arborescence**, au format **Word (.docx)** ou **PDF**.
+Web application that lets a user pick a Confluence page and export it **with all of its child pages,
+preserving the hierarchy**, as **Word (.docx)** or **PDF**.
 
-- 🔐 Application protégée par **OAuth2 / OpenID Connect** (Keycloak, Entra ID, Okta, Google…)
-- 🔑 Accès à Confluence via le **PAT** (Personal Access Token) que chaque utilisateur saisit dans ses préférences
-  (vérifié auprès de Confluence puis stocké **chiffré** AES-256-GCM)
-- ⏳ Génération **asynchrone** via une **file d'attente** PostgreSQL avec concurrence bornée, quotas par utilisateur
-  et reprise automatique
-- 🗑️ Chaque export reste téléchargeable **48 h**, puis est supprimé automatiquement
-- 🪣 Stockage des documents sur **disque local** ou **S3 / compatible S3** (activé dès que `S3_BUCKET` est défini)
-- 🌳 L'arborescence est conservée : titres numérotés (`1`, `1.1`, `1.1.1`…), niveaux de titre Word/PDF,
-  table des matières, liens internes réécrits, images embarquées
+- 🔐 Protected by **OAuth2 / OpenID Connect** (Keycloak, Entra ID, Okta, Google…)
+- 🔑 Confluence is accessed with each user's **personal access token (PAT)**, entered in their preferences,
+  verified against Confluence and stored **encrypted** (AES-256-GCM)
+- ⏳ Generation is **asynchronous**, through a PostgreSQL-backed **queue** with bounded concurrency,
+  per-user quotas and automatic recovery
+- 🗑️ Every export stays downloadable for **48 h**, then it is deleted automatically
+- 🏢 Documents can be produced in the **company format** from a Word template: header, footer, fonts and
+  page layout (see [docs/word-template.md](docs/word-template.md))
+- 🪣 Documents are stored on **local disk** or **S3 / S3-compatible** object storage
+- 📈 **OpenTelemetry** traces and metrics over OTLP, with trace ids in the logs
+- 🌳 The hierarchy is preserved: numbered titles (`1`, `1.1`, `1.1.1`…), real Word/PDF heading levels,
+  a table of contents, rewritten internal links and embedded images
 
-| Nouvel export                                           | Mes exports                                     |
-| ------------------------------------------------------- | ----------------------------------------------- |
-| Recherche par titre, ID ou URL + aperçu de l'arborescence | Suivi en temps réel, téléchargement, expiration |
+## Quick start
 
-## Démarrage rapide
-
-### Option 1 — Docker Compose (tout-en-un)
+### Option 1 — Docker Compose (everything included)
 
 ```bash
 make up            # = docker compose up --build
 ```
 
-Ouvrir <http://localhost:8080>, se connecter (fournisseur OIDC factice, connexion automatique),
-puis dans **Préférences** saisir le PAT `dev-pat`. Le Confluence factice contient une arborescence de démo
-(cherchez « Documentation »).
+Open <http://localhost:8080>, sign in (the mock OIDC provider signs you in automatically), then set the PAT
+`dev-pat` in **Preferences**. The mock Confluence contains a demo tree (search for “Documentation”).
 
-### Option 2 — En local, sans Docker
+### Option 2 — Kubernetes (Helm)
 
-Prérequis : Go ≥ 1.26, Node ≥ 22, PostgreSQL ≥ 14, LibreOffice (`soffice`) pour la conversion.
+```bash
+helm upgrade --install confluence-to-doc ./charts/confluence-to-doc \
+  -n confluence-to-doc --create-namespace \
+  -f charts/confluence-to-doc/values-production.yaml
+```
+
+The chart deploys the application only: PostgreSQL, object storage, Confluence and the OIDC provider stay
+external. API and worker pods scale separately. See [charts/confluence-to-doc](charts/confluence-to-doc/).
+
+### Option 3 — Locally, without Docker
+
+Requirements: Go ≥ 1.26, Node ≥ 22, PostgreSQL ≥ 14, LibreOffice (`soffice`) for the conversion.
 
 ```bash
 make install
-cp .env.example .env && sed -i "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(openssl rand -base64 32)|" .env
-make dev-mocks      # terminal 1 : faux Confluence (:8090) + faux IdP OIDC (:8091)
-make dev-backend    # terminal 2 : API + workers (:8080)
-make dev-frontend   # terminal 3 : Vite (:5173) — mettre PUBLIC_URL=http://localhost:5173 dans .env
+cp .env.example .env && sed -i '' "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(openssl rand -base64 32)|" .env
+make dev-mocks      # terminal 1: mock Confluence (:8090) + mock OIDC provider (:8091)
+make dev-backend    # terminal 2: API + workers (:8080)
+make dev-frontend   # terminal 3: Vite (:5173) — set PUBLIC_URL=http://localhost:5173 in .env
 ```
 
-### Brancher de vrais services
+### Connecting the real services
 
-| Variable              | Exemple                                                    |
-| --------------------- | ---------------------------------------------------------- |
-| `OIDC_ISSUER_URL`     | `https://keycloak.example.com/realms/acme`                 |
-| `OIDC_CLIENT_ID`      | client **confidentiel**, redirect URI `${PUBLIC_URL}/auth/callback` |
-| `OIDC_CLIENT_SECRET`  | secret du client                                           |
-| `CONFLUENCE_BASE_URL` | `https://confluence.example.com` (Server / Data Center)    |
-| `ENCRYPTION_KEY`      | `openssl rand -base64 32` (à conserver dans un coffre)     |
-| `S3_BUCKET` (optionnel) | active le stockage S3 au lieu du disque local ; voir `S3_*` dans la configuration |
+| Variable              | Example                                                             |
+| --------------------- | ------------------------------------------------------------------- |
+| `OIDC_ISSUER_URL`     | `https://keycloak.example.com/realms/acme`                          |
+| `OIDC_CLIENT_ID`      | **confidential** client, redirect URI `${PUBLIC_URL}/auth/callback` |
+| `OIDC_CLIENT_SECRET`  | the client secret                                                   |
+| `CONFLUENCE_BASE_URL` | `https://confluence.example.com` (Server / Data Center)             |
+| `ENCRYPTION_KEY`      | `openssl rand -base64 32` (keep it in a vault)                      |
+| `WORD_TEMPLATE_PATH`  | optional: company Word template applied to every document           |
+| `S3_BUCKET`           | optional: switches document storage from local disk to S3           |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | optional: enables OpenTelemetry traces and metrics           |
 
-Toutes les variables sont décrites dans [docs/configuration.md](docs/configuration.md).
+Every variable is described in [docs/configuration.md](docs/configuration.md).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  B[Navigateur<br/>SPA React] -- cookie de session HttpOnly --> API
-  subgraph Go[Binaire Go]
-    API[API REST + OIDC BFF]
-    W[Workers d'export]
-    J[Janitor 48 h]
+  B[Browser<br/>React SPA] -- HttpOnly session cookie --> API
+  subgraph Go[Go binary]
+    API[REST API + OIDC BFF]
+    W[Export workers]
+    J[48 h janitor]
   end
-  API -- enqueue --> PG[(PostgreSQL<br/>file + données)]
+  API -- enqueue --> PG[(PostgreSQL<br/>queue + data)]
   W -- claim SKIP LOCKED --> PG
-  W -- PAT de l'utilisateur --> C[Confluence REST API]
-  W -- HTML --> LO[LibreOffice headless]
-  W -- PDF/DOCX --> S[(Stockage<br/>disque local ou S3)]
-  API -- téléchargement --> S
+  W -- user's PAT --> C[Confluence REST API]
+  W -- HTML --> LO[Headless LibreOffice]
+  LO -- DOCX --> T[Company Word template]
+  T -- PDF/DOCX --> S[(Storage<br/>local disk or S3)]
+  API -- download --> S
   J -- purge --> S
-  API <-- Authorization Code + PKCE --> IDP[Fournisseur OIDC]
+  API <-- Authorization Code + PKCE --> IDP[OIDC provider]
 ```
 
-Un seul binaire, trois rôles (`APP_ROLE=all|api|worker`) pour scaler l'API et les workers indépendamment.
-Détails : [docs/architecture.md](docs/architecture.md) et les décisions dans [docs/adr/](docs/adr/).
+One binary, three roles (`APP_ROLE=all|api|worker`) so the API and the workers scale independently.
+Details in [docs/architecture.md](docs/architecture.md); decisions in [docs/adr/](docs/adr/).
 
-## Développement
+## Documentation
+
+| Document                                            | What it covers                                            |
+| --------------------------------------------------- | --------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md)         | Components, export lifecycle, load control, security       |
+| [docs/configuration.md](docs/configuration.md)       | Every environment variable, deployment notes               |
+| [docs/word-template.md](docs/word-template.md)       | Preparing and troubleshooting the company Word template    |
+| [docs/agent-memory.md](docs/agent-memory.md)         | Durable project memory for AI agents and new contributors  |
+| [charts/confluence-to-doc/](charts/confluence-to-doc/) | Helm chart: values, storage choices, operational notes   |
+| [docs/adr/](docs/adr/)                               | Architecture decision records                              |
+| [CLAUDE.md](CLAUDE.md)                               | Entry point for AI coding agents                           |
+
+## Development
 
 ```bash
-make check   # lint + tests (backend et frontend) — ce que lance la CI
-make fmt     # formatage
-make help    # toutes les commandes
+make check   # lint + tests (backend and frontend) — what CI runs
+make fmt     # formatting
+make help    # all commands
 ```
 
-- Tests backend : unitaires + intégration PostgreSQL (`TEST_DATABASE_URL`) + conversion LibreOffice réelle
-  (ignorés proprement si l'outil est absent).
-- Tests frontend : Vitest + Testing Library.
-- Guide pour contribuer avec un agent IA : [CLAUDE.md](CLAUDE.md).
+- Backend tests: unit + PostgreSQL integration (`TEST_DATABASE_URL`) + real LibreOffice conversion
+  (skipped cleanly when the tool is absent).
+- Frontend tests: Vitest + Testing Library.
 
-## Structure
+## Layout
 
 ```
 backend/
-  cmd/server        point d'entrée (API, workers, janitor)
-  cmd/devmocks      faux Confluence + faux IdP OIDC (dev/tests uniquement)
+  cmd/server        entry point (API, workers, janitor)
+  cmd/devmocks      mock Confluence + mock OIDC provider (development and tests only)
   internal/
-    account         préférences, PAT (validation + chiffrement)
+    account         preferences, PAT (validation + encryption)
     auth            OIDC (Authorization Code + PKCE), sessions, middleware
-    confluence      client REST Confluence (+ fake/ pour les tests)
-    converter       HTML → PDF/DOCX via LibreOffice
-    exporter        parcours de l'arborescence + assemblage HTML
-    export          cas d'usage : création, worker pool, janitor
-    httpapi         routes REST, middlewares (CSRF, sécurité, logs, métriques)
-    storage         stockage des documents : disque local ou S3 (feature flag)
-    store           PostgreSQL (migrations embarquées, file d'attente)
+    confluence      Confluence REST client (+ fake/ for tests)
+    converter       HTML → PDF/DOCX through LibreOffice
+    docx            applies the company Word template to a generated document
+    exporter        page-tree crawl + HTML assembly
+    export          use cases: creation, worker pool, janitor
+    httpapi         REST routes, middleware (CSRF, security, logs, tracing)
+    observability   OpenTelemetry traces and metrics (OTLP)
+    storage         document storage: local disk or S3 (feature flag)
+    store           PostgreSQL (embedded migrations, job queue)
 frontend/src/
-  api/              client HTTP typé + hooks React Query
-  pages/            écrans (exports, nouvel export, préférences)
-  components/       composants partagés
-docs/               architecture, configuration, ADR
+  api/              typed HTTP client + React Query hooks
+  pages/            screens (exports, new export, preferences)
+  components/       shared components
+docs/               architecture, configuration, Word template, agent memory, ADRs
 ```

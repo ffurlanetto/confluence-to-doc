@@ -37,7 +37,7 @@ describe('NewExportPage', () => {
     const user = userEvent.setup();
     renderWithProviders(<NewExportPage />, { route: '/new' });
 
-    await user.type(screen.getByLabelText(/Rechercher une page/), 'guide');
+    await user.type(screen.getByLabelText(/Search for a page/), 'guide');
     await user.click(await screen.findByRole('button', { name: /Guide utilisateur/ }));
 
     // Tree preview loads the children lazily.
@@ -46,7 +46,7 @@ describe('NewExportPage', () => {
     expect(await screen.findByRole('radio', { name: 'Word (.docx)' })).toBeChecked();
 
     await user.click(screen.getByRole('radio', { name: 'PDF' }));
-    await user.click(screen.getByRole('button', { name: 'Lancer l’export' }));
+    await user.click(screen.getByRole('button', { name: 'Start export' }));
 
     await vi.waitFor(() => expect(created).toEqual({ pageId: '10', format: 'pdf', includeChildren: true }));
   });
@@ -57,14 +57,17 @@ describe('NewExportPage', () => {
       'GET /api/confluence/pages': () => ({
         status: 409,
         body: {
-          error: { code: 'pat_invalid', message: 'Le jeton d’accès Confluence est invalide ou expiré.' },
+          error: {
+            code: 'pat_invalid',
+            message: 'The Confluence personal access token is invalid or expired.',
+          },
         },
       }),
     });
     renderWithProviders(<NewExportPage />, { route: '/new' });
-    await userEvent.type(screen.getByLabelText(/Rechercher une page/), 'guide');
+    await userEvent.type(screen.getByLabelText(/Search for a page/), 'guide');
     expect(
-      await screen.findByText('Le jeton d’accès Confluence est invalide ou expiré.'),
+      await screen.findByText('The Confluence personal access token is invalid or expired.'),
     ).toBeInTheDocument();
   });
 });

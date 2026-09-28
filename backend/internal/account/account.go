@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
@@ -38,7 +39,9 @@ func NewService(repo Repo, sealer *crypto.Sealer, confluenceURL *url.URL, timeou
 		repo:          repo,
 		sealer:        sealer,
 		confluenceURL: confluenceURL,
-		httpClient:    &http.Client{Timeout: timeout},
+		// otelhttp traces every Confluence call, which is where most of an
+		// export's time goes.
+		httpClient: &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 

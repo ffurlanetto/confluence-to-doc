@@ -1,11 +1,11 @@
 import type { Export } from '../api/types';
 
 const labels: Record<Export['status'], string> = {
-  queued: 'En file d’attente',
-  running: 'En cours',
-  succeeded: 'Prêt',
-  failed: 'Échec',
-  expired: 'Expiré',
+  queued: 'Queued',
+  running: 'Running',
+  succeeded: 'Ready',
+  failed: 'Failed',
+  expired: 'Expired',
 };
 
 export function StatusBadge({ exp }: { exp: Export }) {
@@ -14,7 +14,7 @@ export function StatusBadge({ exp }: { exp: Export }) {
     label += ` · ${exp.pagesTotal} page(s)`;
   }
   if (exp.status === 'queued' && exp.attempts > 0) {
-    label = 'Nouvelle tentative prévue';
+    label = 'Retry scheduled';
   }
   return (
     <span className={`badge badge-${exp.status}`} role="status">
