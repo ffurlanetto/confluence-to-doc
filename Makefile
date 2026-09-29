@@ -76,3 +76,11 @@ up: ## Start the full stack with docker compose (app + postgres + mocks)
 .PHONY: down
 down: ## Stop the docker compose stack
 	docker compose down
+
+.PHONY: up-release
+up-release: ## Start the stack from the released image (no build); needs a real .env
+	docker compose -f docker-compose.release.yml up -d
+
+.PHONY: down-release
+down-release: ## Stop the released-image stack
+	docker compose -f docker-compose.release.yml down

@@ -57,31 +57,26 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 		return err
 	}
 
-	if l.Template == nil {
-		out, err := l.run(ctx, work, source, format)
-		if err != nil {
-			return err
-		}
-		return copyOut(out, dst)
-	}
-
-	// With a template, always go through DOCX: it is the format the company
-	// template is expressed in.
+	// Always go through DOCX, whatever the target format. It is the format the
+	// company template is expressed in, it is where the table of contents and
+	// the document properties are assembled — and producing the PDF from it
+	// rather than from the HTML is what makes the two formats one layout
+	// instead of two independent renderings of the same source.
 	generated, err := l.run(ctx, work, source, domain.FormatDOCX)
 	if err != nil {
 		return err
 	}
-	templated, err := l.Template.Apply(generated)
+	document, err := l.finish(generated)
 	if err != nil {
-		return fmt.Errorf("applying Word template %q: %w", l.Template.Name(), err)
+		return err
 	}
 	if format == domain.FormatDOCX {
-		_, err = dst.Write(templated)
+		_, err = dst.Write(document)
 		return err
 	}
 
-	docxPath := filepath.Join(work, "templated.docx")
-	if err := os.WriteFile(docxPath, templated, 0o600); err != nil {
+	docxPath := filepath.Join(work, "document-final.docx")
+	if err := os.WriteFile(docxPath, document, 0o600); err != nil {
 		return err
 	}
 	pdf, err := l.run(ctx, work, docxPath, domain.FormatPDF)
@@ -89,6 +84,18 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 		return err
 	}
 	return copyOut(pdf, dst)
+}
+
+// finish turns the converter's raw DOCX into the document that is delivered.
+func (l LibreOffice) finish(generated []byte) ([]byte, error) {
+	if l.Template == nil {
+		return docx.Polish(generated)
+	}
+	document, err := l.Template.Apply(generated)
+	if err != nil {
+		return nil, fmt.Errorf("applying Word template %q: %w", l.Template.Name(), err)
+	}
+	return document, nil
 }
 
 // run converts one file with a throw-away LibreOffice profile and returns the

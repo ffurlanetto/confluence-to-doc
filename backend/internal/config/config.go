@@ -119,6 +119,9 @@ type ExportConfig struct {
 	// WordTemplatePath points at a company Word template (.docx/.dotx)
 	// applied to every generated document. Empty means default styling.
 	WordTemplatePath string
+	// Classification is written to the subject property of every generated
+	// document, for the document management systems that sort on it.
+	Classification string
 }
 
 // metricPrefixPattern keeps prefixes portable across metric backends; the
@@ -171,6 +174,7 @@ func load(getenv func(string) string) (*Config, error) {
 			SofficePath:       e.str("SOFFICE_PATH", "soffice"),
 			ConfluenceWorkers: e.int("CONFLUENCE_FETCH_CONCURRENCY", 4),
 			WordTemplatePath:  e.str("WORD_TEMPLATE_PATH", ""),
+			Classification:    e.str("DOCUMENT_CLASSIFICATION", ""),
 		},
 	}
 	cfg.Telemetry = TelemetryConfig{

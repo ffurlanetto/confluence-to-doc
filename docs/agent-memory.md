@@ -29,8 +29,46 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   configured — otherwise the company font would never win.
 - Each conversion gets a throw-away LibreOffice profile (`-env:UserInstallation=…`); without it parallel
   conversions collide over a shared profile.
-- LibreOffice invents style names (`BodyText`, `TableContents`, `PreformattedText`, `BodyTextdoc-title`).
-  Only `Heading1…6` overlaps with what a Word template defines — everything else is remapped.
+- LibreOffice invents style **ids** (`BodyText`, `TableContents`, `PreformattedText`, `InternetLink`,
+  `StrongEmphasis`, `Emphasis`, `SourceText`, `Del`) but records the **Word style name** inside each of
+  them: `InternetLink` declares `<w:name w:val="Hyperlink"/>`, `StrongEmphasis` declares `Strong`. The
+  name is the interoperable key — Word does not translate it, so it also matches a template authored in
+  another language. `docx.remapStyles` resolves by id first, then by name.
+- Inline markup goes through those character styles rather than direct formatting: `<strong>` becomes
+  `<w:rStyle w:val="StrongEmphasis"/>` with **no** `<w:b/>` on the run. Dropping an unknown character
+  style therefore loses the formatting outright; the merge carries the definition over instead. (`<b>`
+  and `<i>`, by contrast, do produce direct `<w:b/>`/`<w:i/>`.)
+- LibreOffice's `Del`, `Ins` and `Q` styles have an **empty** `<w:rPr>`: `<del>`, `<ins>` and `<q>` lose
+  their marking on import, and `<mark>` is not mapped at all. The renderer rewrites the first three into
+  `<s>`, `<u>` and a background-coloured span, which do map. Measured, not assumed — see
+  [html-mapping.md](html-mapping.md) for the whole table.
+- **`<meta>` elements become document properties.** `author`, `description` and `keywords` land in
+  `docProps/core.xml`, `classification` becomes `dc:subject`, and *any other name* becomes a custom
+  property in `docProps/custom.xml`. That is the whole mechanism behind the export's metadata — there is
+  no OOXML written by hand for it.
+- **A CSS class becomes part of the style name**: `<p class="toc-entry-2">` yields a style named
+  `Text Body.toc-entry-2`. That is the handle the DOCX step uses to find the table of contents again;
+  nothing else survives the HTML round trip well enough to mark a paragraph. **Match the suffix only** —
+  the part before the dot is LibreOffice's own base style, and it is `Text Body` in 7.4 but `Body Text`
+  in later versions. CI caught that; the container used for local checks did not.
+- `Template.Apply` keeps the *template* package as the base, so the generated `docProps` are only visible
+  if their **package relationships and content types** are added too. A template carrying no properties of
+  its own has neither, and the metadata silently disappears — including from the PDF.
+- LibreOffice's own DOCX has **no theme part at all** and never emits `w:themeColor`. A company theme can
+  therefore only come from the template, and it does: part, relationship and content type all survive the
+  merge, so styles referencing `accent1` or the hyperlink colour resolve.
+- **Tables are sized for LibreOffice's own page.** Its HTML import uses A4 with 1134/567 twip margins, so
+  it fits every table into 10205 twips and writes the result as absolute `dxa` widths with
+  `<w:tblLayout w:type="fixed"/>`. A company template with 2.5 cm margins leaves only 9070 — which is why
+  `docx.fitTables` rescales tables as the section properties are swapped.
+- **CSS widths on tables are ignored**, both `table { width: … }` and `<col style="width: …">`. LibreOffice
+  sizes columns from their content. The HTML *attribute* `width="100%"` is honoured, and is the only way
+  to get a relative `<w:tblW w:type="pct"/>` out of the import.
+- **`page-break-inside: avoid` maps to `<w:keepLines/>`** — on `p`, `li`, `blockquote`, `pre` and headings.
+  Where it lands depends on how it is written: a **stylesheet rule** becomes part of a generated paragraph
+  style (which the Word template merge throws away), an **inline style** becomes direct formatting on the
+  paragraph (which survives). The renderer therefore writes it inline; see `exporter.keepTogether`.
+- `page-break-after: avoid` is **not** mapped: LibreOffice emits no `<w:keepNext/>` for it.
 
 ### Word template (`internal/docx`)
 
@@ -48,6 +86,10 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   retry would burn a LibreOffice run to reach the same error.
 - The merge manipulates OOXML as text. `TestApplyProducesWellFormedXML` parses every part of the result;
   keep that test green, it is the cheapest guard against a broken package.
+- Swapping the section properties changes the printable width under content that was already laid out.
+  `fitTables` scales table widths (`w:tblW`, `w:gridCol`, `w:tcW`, `dxa` only) by truncating integer
+  division, so the column grid can only end up narrower than the page, never wider. Nested tables are
+  scaled with the table that holds them, not measured against the page on their own.
 
 ### Telemetry (`internal/observability`)
 

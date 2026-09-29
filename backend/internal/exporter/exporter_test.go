@@ -119,11 +119,11 @@ func TestRenderHTML(t *testing.T) {
 
 	mustContain := []string{
 		`<h1 id="page-1"`, `1 Root</h1>`, // root title is h1
-		`<h2>Intro</h2>`,                      // body h1 shifted under the page title
+		`Intro</h2>`,                          // body h1 shifted under the page title
 		`<h2 id="page-2"`, `1.1 Child A</h2>`, // children are h2
-		`<h4>Section</h4>`, // body h2 of a depth-1 page
+		`Section</h4>`, // body h2 of a depth-1 page
 		`<h3 id="page-4"`, `1.1.1 Grandchild &lt;x&gt;</h3>`,
-		`<h6>Deep</h6>`,               // capped at h6
+		`Deep</h6>`,                   // capped at h6
 		`href="#page-4"`,              // internal link rewritten
 		`/display/X/Other"`,           // external link made absolute
 		`src="data:image/png;base64,`, // image inlined
@@ -160,5 +160,150 @@ func TestRenderHTMLHonoursCancellation(t *testing.T) {
 	cancel()
 	if _, err := exporter.RenderHTML(ctx, root, exporter.RenderOptions{Title: "R"}, failingAssets{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
+func TestRenderKeepsBlocksWholeOnOnePage(t *testing.T) {
+	const keep = "page-break-inside: avoid"
+	body := `<p>plain</p><ul><li>item</li></ul><blockquote>quoted</blockquote><pre>code</pre>` +
+		`<p style="color: red">already styled</p><p style="page-break-inside: auto">page decides</p>` +
+		`<table><tbody><tr><td><p>in a cell</p></td></tr></tbody></table>`
+	root := &exporter.Node{Page: confluence.Page{
+		PageSummary: confluence.PageSummary{ID: "1", Title: "Root"}, BodyHTML: body,
+	}}
+
+	out, err := exporter.RenderHTML(context.Background(), root,
+		exporter.RenderOptions{Title: "Root", GeneratedAt: time.Now()}, failingAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(out)
+
+	// LibreOffice maps this declaration to w:keepLines. It has to be inline:
+	// a stylesheet rule becomes a paragraph style, and a Word template
+	// replaces the converter's styles with its own.
+	for _, want := range []string{
+		`<p style="` + keep + `">plain</p>`,
+		`<li style="` + keep + `">item</li>`,
+		`<blockquote style="` + keep + `">quoted</blockquote>`,
+		`<pre style="` + keep + `">code</pre>`,
+		`<p style="color: red; ` + keep + `">already styled</p>`,
+		`<p style="` + keep + `">in a cell</p>`,
+		`<p class="doc-title" style="` + keep + `">Root</p>`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("output does not contain %q", want)
+		}
+	}
+	// A page that decides for itself keeps its declaration.
+	if !strings.Contains(doc, `<p style="page-break-inside: auto">page decides</p>`) {
+		t.Error("an explicit page-break-inside from the page was overridden")
+	}
+	// Headings still start a new page, and stay whole.
+	if !strings.Contains(doc, `style="page-break-before: always; `+keep+`"`) {
+		t.Error("page headings lost either their page break or their keep-together")
+	}
+	// Table rows are not kept together: a long table has to break somewhere.
+	if strings.Contains(doc, `<tr style=`) || strings.Contains(doc, `<td style=`) {
+		t.Error("table rows/cells must not be kept together")
+	}
+}
+
+func TestRenderWritesDocumentProperties(t *testing.T) {
+	root := &exporter.Node{Page: confluence.Page{
+		PageSummary: confluence.PageSummary{ID: "1", Title: "Root"},
+	}}
+	out, err := exporter.RenderHTML(context.Background(), root, exporter.RenderOptions{
+		Title: "Product documentation", GeneratedAt: time.Now(),
+		Author: "Jane Doe", Description: "Exported from Confluence", Classification: "Internal",
+		Keywords: []string{"Confluence", "export"},
+		Properties: []exporter.Property{
+			{Name: "Confluence page ID", Value: "1"},
+			{Name: "Source URL", Value: "https://confluence.example.com/x/1?a=b&c=d"},
+			{Name: "Empty", Value: ""},
+		},
+	}, failingAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(out)
+
+	// LibreOffice reads these into docProps, which is what reaches the DOCX
+	// and the PDF. Unknown names become custom document properties.
+	for _, want := range []string{
+		`<meta name="author" content="Jane Doe">`,
+		`<meta name="description" content="Exported from Confluence">`,
+		`<meta name="keywords" content="Confluence, export">`,
+		`<meta name="classification" content="Internal">`,
+		`<meta name="Confluence page ID" content="1">`,
+		`content="https://confluence.example.com/x/1?a=b&amp;c=d"`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("output does not contain %q", want)
+		}
+	}
+	if strings.Contains(doc, `name="Empty"`) {
+		t.Error("an empty property must not be written")
+	}
+	// The properties belong to the head, before the document starts.
+	if strings.Index(doc, `name="author"`) > strings.Index(doc, "<body>") {
+		t.Error("the properties are not in the document head")
+	}
+}
+
+func TestRenderMarksContentsEntriesByLevel(t *testing.T) {
+	root := &exporter.Node{
+		Page: confluence.Page{PageSummary: confluence.PageSummary{ID: "1", Title: "Root"}}, Number: "1",
+		Children: []*exporter.Node{{
+			Page:  confluence.Page{PageSummary: confluence.PageSummary{ID: "2", Title: "Child"}},
+			Depth: 1, Number: "1.1",
+		}},
+	}
+	out, err := exporter.RenderHTML(context.Background(), root,
+		exporter.RenderOptions{Title: "Root", GeneratedAt: time.Now()}, failingAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(out)
+
+	// The level travels in the class, because LibreOffice turns it into a
+	// style name — which is how the DOCX step finds these paragraphs again.
+	if !strings.Contains(doc, `<p class="toc-entry-1"><a href="#page-1">1 Root</a></p>`) {
+		t.Errorf("the root contents entry is missing or unmarked:\n%s", doc)
+	}
+	if !strings.Contains(doc, `<p class="toc-entry-2"><a href="#page-2">1.1 Child</a></p>`) {
+		t.Error("the child contents entry is not marked with its level")
+	}
+	if got := exporter.TOCEntryClass(20); got != "toc-entry-9" {
+		t.Errorf("TOCEntryClass(20) = %q, want the deepest level Word has", got)
+	}
+}
+
+func TestRenderKeepsMarkupLibreOfficeWouldSwallow(t *testing.T) {
+	body := `<p><del>gone</del> <ins>added</ins> <mark>noted</mark></p>` +
+		`<ul class="inline-task-list"><li><input type="checkbox" checked>Done</li>` +
+		`<li><input type="checkbox">Open</li></ul>` +
+		`<p><input type="text" value="secret"></p>`
+	root := &exporter.Node{Page: confluence.Page{
+		PageSummary: confluence.PageSummary{ID: "1", Title: "Root"}, BodyHTML: body,
+	}}
+	out, err := exporter.RenderHTML(context.Background(), root,
+		exporter.RenderOptions{Title: "Root", GeneratedAt: time.Now()}, failingAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(out)
+
+	// LibreOffice maps <del>, <ins> and <mark> to nothing at all, so they are
+	// rewritten to markup it does render.
+	for _, want := range []string{"<s>gone</s>", "<u>added</u>", "background-color: #ffff00", "☑", "☐"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("output does not contain %q", want)
+		}
+	}
+	for _, unwanted := range []string{"<del>", "<ins>", "<mark", "<input", "secret"} {
+		if strings.Contains(doc, unwanted) {
+			t.Errorf("output must not contain %q", unwanted)
+		}
 	}
 }

@@ -24,6 +24,17 @@ import (
 // maxImageWidthPx keeps images inside an A4 page with default margins.
 const maxImageWidthPx = 640
 
+// keepTogether asks the converter not to break a block across two pages. A
+// paragraph cut in half reads badly, more so a short one, so the whole block
+// moves to the next page instead.
+//
+// It is written as an inline style on purpose. LibreOffice turns a stylesheet
+// rule into a paragraph style, and a Word template replaces the converter's
+// styles with its own — the setting would be lost exactly when a template is
+// configured. As direct formatting it survives, and it is pagination rather
+// than typography, so it does not fight the company look.
+const keepTogether = "page-break-inside: avoid"
+
 // Assets resolves resources referenced by page bodies.
 type Assets interface {
 	// ResolveURL makes a (possibly relative) Confluence URL absolute.
@@ -32,10 +43,22 @@ type Assets interface {
 	FetchImage(ctx context.Context, src string) ([]byte, string, error)
 }
 
+// Property is one document property, in the order it should appear.
+type Property struct{ Name, Value string }
+
 type RenderOptions struct {
 	Title       string
 	SourceURL   string
 	GeneratedAt time.Time
+	// Author, Description, Keywords and Classification become the document's
+	// standard properties; Properties become custom ones. LibreOffice reads
+	// them from <meta> elements and writes them into docProps, so they reach
+	// the DOCX and the PDF alike.
+	Author         string
+	Description    string
+	Keywords       []string
+	Classification string
+	Properties     []Property
 	// UseTemplateStyles omits this document's own typography so that the
 	// styles of a company Word template apply instead.
 	UseTemplateStyles bool
@@ -55,14 +78,16 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 	var b bytes.Buffer
 	b.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>`)
 	b.WriteString(html.EscapeString(opts.Title))
+	b.WriteString(`</title>`)
+	writeMetadata(&b, opts)
 	css := structuralCSS
 	if !opts.UseTemplateStyles {
 		css += typographyCSS
 	}
-	b.WriteString(`</title><style>` + css + `</style></head><body>`)
+	b.WriteString(`<style>` + css + `</style></head><body>`)
 
 	// Cover page.
-	fmt.Fprintf(&b, `<p class="doc-title">%s</p>`, html.EscapeString(opts.Title))
+	fmt.Fprintf(&b, `<p class="doc-title" style="%s">%s</p>`, keepTogether, html.EscapeString(opts.Title))
 	fmt.Fprintf(&b, `<p class="doc-meta">Exported from Confluence on %s</p>`, opts.GeneratedAt.Format("2006-01-02 15:04 MST"))
 	if opts.SourceURL != "" {
 		fmt.Fprintf(&b, `<p class="doc-meta">Source: <a href="%[1]s">%[1]s</a></p>`, html.EscapeString(opts.SourceURL))
@@ -72,10 +97,13 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 
 	// Table of contents (only meaningful when there is a hierarchy).
 	if count > 1 {
-		b.WriteString(`<p class="toc-title" style="page-break-before: always">Table of contents</p>`)
+		b.WriteString(`<p class="toc-title" style="page-break-before: always; ` + keepTogether + `">Table of contents</p>`)
 		root.Walk(func(n *Node) {
-			fmt.Fprintf(&b, `<p class="toc-entry" style="margin-left: %.1fcm"><a href="#%s">%s %s</a></p>`,
-				float64(n.Depth)*0.8, anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title))
+			// The level is carried by the class: LibreOffice turns it into a
+			// style name, which is how the DOCX step finds these paragraphs
+			// again and gives them the reader's own "TOC 1…9" styles.
+			fmt.Fprintf(&b, `<p class="%s"><a href="#%s">%s %s</a></p>`,
+				TOCEntryClass(n.Depth), anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title))
 		})
 	}
 
@@ -89,8 +117,8 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 			return
 		}
 		level := min(n.Depth+1, 6)
-		fmt.Fprintf(&b, `<h%d id="%s" style="page-break-before: always"><a name="%s"></a>%s %s</h%d>`,
-			level, anchor(n.Page.ID), anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title), level)
+		fmt.Fprintf(&b, `<h%d id="%s" style="page-break-before: always; %s"><a name="%s"></a>%s %s</h%d>`,
+			level, anchor(n.Page.ID), keepTogether, anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title), level)
 		body, err := r.transformBody(n.Page.BodyHTML, n.Depth+1)
 		if err != nil {
 			renderErr = fmt.Errorf("page %s: %w", n.Page.ID, err)
@@ -112,7 +140,16 @@ const structuralCSS = `
 .doc-title { font-size: 26pt; font-weight: bold; margin-top: 6cm; }
 .doc-meta { color: #555555; }
 .toc-title { font-size: 16pt; font-weight: bold; }
-.toc-entry { margin-top: 0; margin-bottom: 0.1cm; }
+.toc-entry-1, .toc-entry-2, .toc-entry-3, .toc-entry-4, .toc-entry-5,
+.toc-entry-6, .toc-entry-7, .toc-entry-8, .toc-entry-9 { margin-top: 0; margin-bottom: 0.1cm; }
+.toc-entry-2 { margin-left: 0.8cm; }
+.toc-entry-3 { margin-left: 1.6cm; }
+.toc-entry-4 { margin-left: 2.4cm; }
+.toc-entry-5 { margin-left: 3.2cm; }
+.toc-entry-6 { margin-left: 4.0cm; }
+.toc-entry-7 { margin-left: 4.8cm; }
+.toc-entry-8 { margin-left: 5.6cm; }
+.toc-entry-9 { margin-left: 6.4cm; }
 table { border-collapse: collapse; }
 th, td { border: 1px solid #999999; padding: 3px; vertical-align: top; }
 th { background-color: #f0f0f0; }
@@ -131,6 +168,30 @@ h1, h2, h3, h4, h5, h6 { font-family: "Liberation Sans", Arial, sans-serif; }
 
 func anchor(pageID string) string { return "page-" + pageID }
 
+// TOCEntryClass names the class of a table-of-contents entry at depth d. Word
+// numbers its own contents styles from 1, and stops at 9.
+func TOCEntryClass(depth int) string { return "toc-entry-" + strconv.Itoa(min(depth+1, 9)) }
+
+// writeMetadata emits the <meta> elements LibreOffice turns into document
+// properties: the standard ones, and any other name as a custom property.
+func writeMetadata(b *bytes.Buffer, opts RenderOptions) {
+	meta := func(name, content string) {
+		if content == "" {
+			return
+		}
+		fmt.Fprintf(b, `<meta name=%q content=%q>`, name, html.EscapeString(content))
+	}
+	meta("author", opts.Author)
+	meta("description", opts.Description)
+	meta("keywords", strings.Join(opts.Keywords, ", "))
+	// LibreOffice maps "classification" onto the document's subject, which is
+	// the field a document management system usually sorts on.
+	meta("classification", opts.Classification)
+	for _, p := range opts.Properties {
+		meta(p.Name, p.Value)
+	}
+}
+
 type renderer struct {
 	ctx    context.Context
 	assets Assets
@@ -139,14 +200,47 @@ type renderer struct {
 }
 
 // Elements that are either unsafe or meaningless in a static document.
+//
+// <input> is not among them: a Confluence task list is a list of checkboxes,
+// and dropping them loses whether each task is done. It is turned into text
+// instead, and any other input disappears the same way (with empty text).
 var droppedElements = map[atom.Atom]bool{
 	atom.Script: true, atom.Style: true, atom.Iframe: true, atom.Object: true,
-	atom.Embed: true, atom.Form: true, atom.Input: true, atom.Button: true,
+	atom.Embed: true, atom.Form: true, atom.Button: true,
 	atom.Noscript: true, atom.Link: true, atom.Meta: true, atom.Select: true,
 	atom.Textarea: true,
 }
 
+// checkboxText renders a task-list checkbox as the state it records.
+func checkboxText(n *nethtml.Node) string {
+	if t, _ := getAttr(n, "type"); !strings.EqualFold(t, "checkbox") {
+		return ""
+	}
+	if _, i := getAttr(n, "checked"); i >= 0 {
+		return "\u2611 " // ballot box with check
+	}
+	return "\u2610 " // empty ballot box
+}
+
+func replaceWithText(n *nethtml.Node, text string) {
+	n.Type, n.Data, n.DataAtom, n.Attr = nethtml.TextNode, text, 0, nil
+	for c := n.FirstChild; c != nil; c = n.FirstChild {
+		n.RemoveChild(c)
+	}
+}
+
+func retag(n *nethtml.Node, name string, a atom.Atom) {
+	n.Data, n.DataAtom = name, a
+}
+
 var headingLevels = map[atom.Atom]int{atom.H1: 1, atom.H2: 2, atom.H3: 3, atom.H4: 4, atom.H5: 5, atom.H6: 6}
+
+// Blocks of text that should not be split across a page boundary. Table rows
+// are left out: a long table has to break somewhere.
+var keepTogetherElements = map[atom.Atom]bool{
+	atom.P: true, atom.Li: true, atom.Blockquote: true, atom.Pre: true, atom.Dt: true, atom.Dd: true,
+	atom.H1: true, atom.H2: true, atom.H3: true, atom.H4: true, atom.H5: true, atom.H6: true,
+}
 
 func (r *renderer) transformBody(body string, shift int) (string, error) {
 	parent := &nethtml.Node{Type: nethtml.ElementNode, Data: "div", DataAtom: atom.Div}
@@ -185,6 +279,9 @@ func (r *renderer) transformNode(n *nethtml.Node, shift int) {
 		return
 	}
 	stripEventHandlers(n)
+	if keepTogetherElements[n.DataAtom] {
+		appendStyle(n, keepTogether)
+	}
 
 	if lvl, ok := headingLevels[n.DataAtom]; ok {
 		newLvl := min(lvl+shift, 6)
@@ -193,6 +290,20 @@ func (r *renderer) transformNode(n *nethtml.Node, shift int) {
 		return
 	}
 	switch n.DataAtom {
+	case atom.Input:
+		replaceWithText(n, checkboxText(n))
+	case atom.Mark:
+		// LibreOffice knows nothing of <mark> and drops its styling with it.
+		// The same declaration on a <span> it does read.
+		retag(n, "span", atom.Span)
+		appendStyle(n, "background-color: #ffff00")
+	case atom.Del, atom.Strike:
+		// LibreOffice maps these to a character style with no formatting at
+		// all, so the deletion becomes invisible. <s> it strikes through.
+		retag(n, "s", atom.S)
+	case atom.Ins:
+		// Same story: <ins> carries no formatting of its own.
+		retag(n, "u", atom.U)
 	case atom.Img:
 		r.inlineImage(n)
 	case atom.A:
@@ -238,6 +349,21 @@ func setAttr(n *nethtml.Node, key, val string) {
 		return
 	}
 	n.Attr = append(n.Attr, nethtml.Attribute{Key: key, Val: val})
+}
+
+// appendStyle adds a declaration to the element's inline style, keeping what
+// the page already declares.
+func appendStyle(n *nethtml.Node, decl string) {
+	style, _ := getAttr(n, "style")
+	current := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(style), ";"))
+	if current == "" {
+		setAttr(n, "style", decl)
+		return
+	}
+	if strings.Contains(current, strings.SplitN(decl, ":", 2)[0]) {
+		return // the page already decides this property
+	}
+	setAttr(n, "style", current+"; "+decl)
 }
 
 func removeAttr(n *nethtml.Node, key string) {

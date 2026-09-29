@@ -86,19 +86,41 @@ Queue robustness:
 - images are downloaded with the user's PAT (same origin only), resized to the printable width and
   embedded as data URIs; an unreachable image degrades to its alternative text;
 - links to pages included in the export become internal anchors, other links become absolute URLs;
+- paragraphs, list items, quotations, code blocks and headings carry `page-break-inside: avoid`, so a
+  block that no longer fits moves to the next page whole instead of being cut in two. It is written as an
+  inline style on purpose: LibreOffice turns a stylesheet rule into a paragraph style, which the Word
+  template merge would discard;
+- a few elements LibreOffice does not map at all (`<del>`, `<ins>`, `<mark>`, task-list checkboxes) are
+  rewritten into markup it does, so the marking they carry is not silently lost;
+- document properties — title, author, description, keywords, classification and the Confluence source —
+  are written as `<meta>` elements, which the converter turns into `docProps`;
 - sanitisation: scripts, iframes, forms and event handlers are removed.
+
+Both formats come out of the **same** DOCX: the HTML is converted to DOCX, the template (when configured)
+is applied, and a PDF is produced from that document rather than from the HTML. Word and PDF are then one
+layout rather than two independent renderings of the same source.
+
+The table of contents is written as paragraphs whose class carries the level; the DOCX step recognises
+them, applies the reader's *TOC 1…9* styles and wraps them in a real Word `TOC` field.
+
+Every element's fate is recorded in [html-mapping.md](html-mapping.md).
 
 ### Company Word template
 
 When `WORD_TEMPLATE_PATH` is set, the document is produced inside the corporate template
-(`internal/docx`): the template package is the base of the result, and only the generated body is injected
-into it, with images, hyperlinks, list numbering and style references remapped to stay valid.
+(`internal/docx`): the template package is the base of the result — including its colour and font theme —
+and only the generated body is injected into it, with images, hyperlinks, list numbering and style
+references remapped to stay valid. Style references are resolved against the template by id and then by
+style **name**, because LibreOffice and Word give the same style different ids.
 
 Two consequences shape the pipeline:
 
 - the HTML is rendered **without** its own typography, because the converter would turn font declarations
   into direct formatting that overrides the template's styles;
-- PDFs are produced from the templated DOCX rather than from the HTML, so both formats share one layout.
+- PDFs are produced from the templated DOCX rather than from the HTML, so both formats share one layout;
+- tables are rescaled as the template's page setup replaces the converter's. LibreOffice lays tables out
+  on its own, wider page and records absolute column widths; without the rescale, a table wider than the
+  company margins is simply clipped by the reader.
 
 Details and authoring guidance: [word-template.md](word-template.md).
 

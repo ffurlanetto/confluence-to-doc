@@ -47,6 +47,7 @@ const templateContentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="y
 <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
 <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
 </Types>`
 
 const templateRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -54,6 +55,7 @@ const templateRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
 <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>
+<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
 </Relationships>`
 
 // packageRels is the package-level relationship that points Word at the main
@@ -88,10 +90,22 @@ const generatedDocument = `<?xml version="1.0" encoding="UTF-8" standalone="yes"
 <w:p><w:pPr><w:pStyle w:val="BodyText"/></w:pPr><w:r><w:rPr><w:rStyle w:val="StrongEmphasis"/></w:rPr><w:t>Body paragraph</w:t></w:r></w:p>
 <w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>First bullet</w:t></w:r></w:p>
 <w:p><w:r><w:drawing><a:blip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:embed="rId3"/></w:drawing></w:r></w:p>
-<w:p><w:hyperlink r:id="rId4"><w:r><w:t>Confluence</w:t></w:r></w:hyperlink></w:p>
+<w:p><w:hyperlink r:id="rId4"><w:r><w:rPr><w:rStyle w:val="InternetLink"/></w:rPr><w:t>Confluence</w:t></w:r></w:hyperlink></w:p>
+<w:p><w:r><w:rPr><w:rStyle w:val="Del"/></w:rPr><w:t>deleted</w:t></w:r></w:p>
 <w:tbl><w:tblPr><w:tblStyle w:val="TableGrid2"/></w:tblPr><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
 <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>
 </w:body></w:document>`
+
+// generatedStyles mirrors LibreOffice's styles part: its own style ids, each
+// declaring the Word style name it stands for.
+const generatedStyles = `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="48"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/><w:rPr><w:rFonts w:ascii="Liberation Sans"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/></w:style>
+<w:style w:type="character" w:styleId="StrongEmphasis"><w:name w:val="Strong"/><w:rPr><w:b/><w:bCs/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="InternetLink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="000080"/><w:u w:val="single"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="Del"><w:name w:val="del"/><w:rPr></w:rPr></w:style>
+</w:styles>`
 
 const generatedNumbering = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -112,7 +126,7 @@ func generatedParts() map[string][]byte {
 		partContentTypes:        []byte(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="` + ctDocumentMain + `"/></Types>`),
 		partDocument:            []byte(generatedDocument),
 		partDocumentRels:        []byte(generatedRels),
-		partStyles:              []byte(`<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="BodyText"><w:rPr><w:rFonts w:ascii="Liberation Sans"/></w:rPr></w:style></w:styles>`),
+		partStyles:              []byte(generatedStyles),
 		partNumbering:           []byte(generatedNumbering),
 		"word/media/image1.png": []byte("generated-image-bytes"),
 		"docProps/core.xml":     []byte(`<?xml version="1.0"?><cp:coreProperties xmlns:cp="x"><dc:title xmlns:dc="y">Product documentation</dc:title></cp:coreProperties>`),
@@ -165,8 +179,9 @@ func applyFixtures(t *testing.T) map[string][]byte {
 func TestApplyKeepsTemplatePresentation(t *testing.T) {
 	parts := applyFixtures(t)
 
-	if got := string(parts[partStyles]); got != templateStyles {
-		t.Error("styles.xml must be the template's, untouched")
+	if got := string(parts[partStyles]); !strings.Contains(got, `<w:rFonts w:ascii="Corporate Sans"`) ||
+		!strings.Contains(got, `w:styleId="Heading1"`) {
+		t.Error("styles.xml must keep the template's own styles")
 	}
 	if !strings.Contains(string(parts["word/header1.xml"]), "ACME CORPORATION") {
 		t.Error("the template header is missing from the result")
@@ -174,8 +189,16 @@ func TestApplyKeepsTemplatePresentation(t *testing.T) {
 	if string(parts["word/media/logo.jpeg"]) != "template-logo-bytes" {
 		t.Error("the template logo is missing from the result")
 	}
+	// The colour and font theme is only in effect if all three arrive: the
+	// part, the relationship pointing at it, and its content type.
 	if _, ok := parts["word/theme/theme1.xml"]; !ok {
 		t.Error("the template theme is missing from the result")
+	}
+	if !strings.Contains(string(parts[partDocumentRels]), "theme/theme1.xml") {
+		t.Error("the result does not reference the template theme")
+	}
+	if !strings.Contains(string(parts[partContentTypes]), "theme+xml") {
+		t.Error("the theme has no content type, so readers ignore it")
 	}
 
 	doc := string(parts[partDocument])
@@ -216,7 +239,7 @@ func TestApplyRemapsStylesToTemplate(t *testing.T) {
 	if !strings.Contains(doc, `<w:pStyle w:val="Heading1"/>`) {
 		t.Error("a style the template defines must be kept")
 	}
-	for _, unknown := range []string{"BodyText", "ListParagraph", "StrongEmphasis", "TableGrid2"} {
+	for _, unknown := range []string{"BodyText", "ListParagraph", "TableGrid2", "Del"} {
 		if strings.Contains(doc, `"`+unknown+`"`) {
 			t.Errorf("style %q is unknown to the template and must not be referenced", unknown)
 		}
@@ -224,6 +247,46 @@ func TestApplyRemapsStylesToTemplate(t *testing.T) {
 	// Two paragraphs had an unknown paragraph style; both fall back to Normal.
 	if n := strings.Count(doc, `<w:pStyle w:val="Normal"/>`); n != 2 {
 		t.Errorf("got %d paragraphs remapped to Normal, want 2:\n%s", n, doc)
+	}
+}
+
+// LibreOffice and Word give the same style different ids — `InternetLink`
+// against `Hyperlink` — while both declare the same <w:name>. Matching on the
+// name is what lets a link take the company's link colour.
+func TestApplyResolvesStyleReferencesByName(t *testing.T) {
+	parts := applyFixtures(t)
+	doc := string(parts[partDocument])
+
+	if !strings.Contains(doc, `<w:rStyle w:val="Hyperlink"/>`) {
+		t.Errorf("the hyperlink does not use the template's Hyperlink style:\n%s", doc)
+	}
+	if strings.Contains(doc, "InternetLink") {
+		t.Error("the converter's own style id leaked into the result")
+	}
+}
+
+// A character style the template has no name for carries its definition along:
+// dropping the reference would silently lose the bold of <strong>.
+func TestApplyCarriesOverCharacterStylesTheTemplateLacks(t *testing.T) {
+	parts := applyFixtures(t)
+	doc, styles := string(parts[partDocument]), string(parts[partStyles])
+
+	if !strings.Contains(doc, `<w:rStyle w:val="StrongEmphasis"/>`) {
+		t.Error("the bold run lost its style reference")
+	}
+	if !strings.Contains(styles, `w:styleId="StrongEmphasis"`) {
+		t.Errorf("the style it refers to was not carried over:\n%s", styles)
+	}
+	// An empty style stands for nothing and is not worth carrying.
+	if strings.Contains(styles, `w:styleId="Del"`) {
+		t.Error("an empty character style was carried over")
+	}
+	// The template's own styles are untouched, and still come first.
+	if !strings.Contains(styles, templateStyles[strings.Index(templateStyles, "<w:docDefaults>"):strings.Index(templateStyles, "</w:styles>")]) {
+		t.Errorf("the template's styles were modified:\n%s", styles)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(styles), "</w:styles>") {
+		t.Error("the styles part is malformed")
 	}
 }
 
@@ -467,5 +530,89 @@ func TestApplyPreservesEscapedHyperlinkTargets(t *testing.T) {
 	}
 	if !found {
 		t.Error("the hyperlink relationship is missing from the result")
+	}
+}
+
+func TestApplyFitsTablesToTheTemplatePage(t *testing.T) {
+	// The template's page (A4, 1134 twip margins) leaves 9638 twips of text;
+	// LibreOffice sized this table for its own, wider page.
+	const oversized = `<w:tbl><w:tblPr><w:tblW w:w="10205" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+		`<w:tblGrid><w:gridCol w:w="5000"/><w:gridCol w:w="5205"/></w:tblGrid>` +
+		`<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc>` +
+		`<w:tc><w:tcPr><w:tcW w:w="5205" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>`
+
+	parts := generatedParts()
+	parts[partDocument] = []byte(strings.Replace(generatedDocument, "<w:tbl>", oversized+"<w:tbl>", 1))
+
+	tpl := loadFixtureTemplate(t)
+	if tpl.textWidth != 9638 {
+		t.Fatalf("fixture template text width = %d, want 9638", tpl.textWidth)
+	}
+	result, err := tpl.Apply(buildZip(t, parts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := readZip(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc := string(out[partDocument])
+	total := 0
+	for _, col := range reGridCol.FindAllString(doc, -1) {
+		total += intAttr(col, reWidthAttr)
+	}
+	if total == 0 {
+		t.Fatal("the table grid disappeared from the result")
+	}
+	if total > tpl.textWidth {
+		t.Errorf("table is %d twips wide, the template page holds %d", total, tpl.textWidth)
+	}
+	if !strings.Contains(doc, "wide") {
+		t.Error("the table content was lost")
+	}
+}
+
+// The properties describe the export, not the template, and a reader only sees
+// them if the package points at them — which a template carrying none of its
+// own does not.
+func TestApplyCarriesTheDocumentProperties(t *testing.T) {
+	parts := templateParts()
+	delete(parts, "docProps/core.xml") // a template with no properties of its own
+
+	tpl, err := parseTemplate(buildZip(t, parts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := generatedParts()
+	generated["docProps/custom.xml"] = []byte(`<?xml version="1.0"?><Properties xmlns="x">` +
+		`<property name="Confluence page ID"><vt:lpwstr xmlns:vt="y">42</vt:lpwstr></property></Properties>`)
+
+	result, err := tpl.Apply(buildZip(t, generated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := readZip(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(out["docProps/core.xml"]), "Product documentation") {
+		t.Error("the export's own properties are missing from the result")
+	}
+	if !strings.Contains(string(out["docProps/custom.xml"]), "Confluence page ID") {
+		t.Error("the custom properties are missing from the result")
+	}
+	rels := string(out[partPackageRels])
+	for _, want := range []string{"docProps/core.xml", "docProps/custom.xml"} {
+		if !strings.Contains(rels, want) {
+			t.Errorf("the package does not point at %s, so a reader ignores it:\n%s", want, rels)
+		}
+	}
+	types := string(out[partContentTypes])
+	for _, want := range []string{"core-properties+xml", "custom-properties+xml"} {
+		if !strings.Contains(types, want) {
+			t.Errorf("%s has no content type:\n%s", want, types)
+		}
 	}
 }

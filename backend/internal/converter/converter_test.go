@@ -5,17 +5,21 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/exporter"
 )
 
 // sample keeps an accented word on purpose: it exercises UTF-8 round-tripping
@@ -125,6 +129,8 @@ func minimalTemplate(t *testing.T) *docx.Template {
 			`<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>` +
 			`<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>` +
 			`<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>` +
+			// Word calls it Hyperlink, LibreOffice InternetLink; only the name matches.
+			`<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="C00000" w:themeColor="accent1"/><w:u w:val="single"/></w:rPr></w:style>` +
 			`</w:styles>`,
 		"word/header1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr ` + ns + `>` +
 			`<w:p><w:r><w:t>ACME CORPORATION — INTERNAL</w:t></w:r></w:p></w:hdr>`,
@@ -222,5 +228,203 @@ func TestConvertPDFWithCompanyTemplate(t *testing.T) {
 	}
 	if !bytes.HasPrefix(out.Bytes(), []byte("%PDF-")) {
 		t.Fatalf("output is not a PDF: %q", out.Bytes()[:min(16, out.Len())])
+	}
+}
+
+// wideSample mirrors what exporter.RenderHTML produces: a table LibreOffice
+// sizes for its own, wider page, and blocks carrying the inline
+// `page-break-inside: avoid` that the renderer adds to every paragraph.
+func wideSample() []byte {
+	var heads, cells strings.Builder
+	for i := 1; i <= 8; i++ {
+		fmt.Fprintf(&heads, "<th>Heading number %d of the table</th>", i)
+		fmt.Fprintf(&cells, "<td>Cell %d with a reasonably long sentence that must wrap</td>", i)
+	}
+	return []byte(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
+		`<p style="page-break-inside: avoid">Before.</p>` +
+		`<table border="1" cellpadding="4"><tbody><tr>` + heads.String() + `</tr><tr>` + cells.String() + `</tr></tbody></table>` +
+		`<p style="page-break-inside: avoid">After.</p></body></html>`)
+}
+
+func documentXML(t *testing.T, docxBytes []byte) string {
+	t.Helper()
+	return partOf(t, docxBytes, "word/document.xml")
+}
+
+func partOf(t *testing.T, docxBytes []byte, name string) string {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(docxBytes), int64(len(docxBytes)))
+	if err != nil {
+		t.Fatalf("result is not a DOCX package: %v", err)
+	}
+	for _, f := range zr.File {
+		if f.Name != name {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rc.Close()
+		content, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(content)
+	}
+	t.Fatalf("%s missing", name)
+	return ""
+}
+
+// TestConvertFitsTablesToTheTemplatePage is the end-to-end check for the two
+// layout rules: a table has to stay inside the printable width of the company
+// page, and a paragraph must not be split across two pages. Both depend on how
+// this LibreOffice version maps our HTML, which only a real conversion shows.
+func TestConvertFitsTablesToTheTemplatePage(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, wideSample(), domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	// The template's page: A4 less 1134 twips of margin on each side.
+	const printable = 11906 - 1134 - 1134
+	total := 0
+	columns := regexp.MustCompile(`<w:gridCol w:w="(\d+)"/>`).FindAllStringSubmatch(doc, -1)
+	if len(columns) == 0 {
+		t.Fatal("the converted document has no table grid")
+	}
+	for _, m := range columns {
+		w, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("unparsable column width %q", m[1])
+		}
+		total += w
+	}
+	if total > printable {
+		t.Errorf("table is %d twips wide, the company page holds %d", total, printable)
+	}
+
+	// `page-break-inside: avoid` has to survive as direct formatting: the
+	// template replaced the converter's styles with its own.
+	if !strings.Contains(doc, "<w:keepLines/>") {
+		t.Error("paragraphs are not kept whole: no w:keepLines in the templated document")
+	}
+}
+
+// TestConvertKeepsInlineFormatting covers what happens between LibreOffice's
+// style ids and Word's: a link has to pick up the company's link style, and
+// bold has to survive even though the template names no style for it.
+func TestConvertKeepsInlineFormatting(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
+		`<p>A <strong>bold</strong> word, an <em>emphasised</em> one, and a ` +
+		`<a href="https://confluence.example.com/x/1">link</a>.</p></body></html>`
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, []byte(html), domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	if !strings.Contains(doc, `<w:rStyle w:val="Hyperlink"/>`) {
+		t.Errorf("the link does not use the company Hyperlink style:\n%s", doc)
+	}
+	if strings.Contains(doc, "InternetLink") {
+		t.Error("the converter's own style id leaked into the result")
+	}
+
+	// Bold and italics come from character styles the template does not name;
+	// their definitions must have come along, or the words lose their look.
+	styles := partOf(t, out.Bytes(), "word/styles.xml")
+	for _, want := range []string{"bold", "emphasised"} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("%q is missing from the document", want)
+		}
+	}
+	for _, m := range regexp.MustCompile(`<w:rStyle w:val="([^"]+)"/>`).FindAllStringSubmatch(doc, -1) {
+		if !strings.Contains(styles, `w:styleId="`+m[1]+`"`) {
+			t.Errorf("run style %q is referenced but not defined", m[1])
+		}
+	}
+	if !strings.Contains(styles, "<w:b/>") {
+		t.Errorf("no bold left anywhere in the styles:\n%s", styles)
+	}
+}
+
+// TestConvertProducesAStructuredDocument runs the renderer's own output through
+// the whole pipeline: the mappings it relies on are LibreOffice's, and only a
+// real conversion shows whether this version still honours them.
+func TestConvertProducesAStructuredDocument(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	html, err := exporter.RenderHTML(ctx, twoLevelTree(), exporter.RenderOptions{
+		Title: "Product documentation", GeneratedAt: time.Now(), UseTemplateStyles: true,
+		Author: "Jane Doe", Description: "Exported from Confluence", Classification: "Internal",
+		Keywords:   []string{"Confluence", "export"},
+		Properties: []exporter.Property{{Name: "Confluence page ID", Value: "1"}},
+	}, noAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, html, domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	// Page titles are headings, at the level of their depth in the tree.
+	for _, want := range []string{`<w:pStyle w:val="Heading1"/>`, `<w:pStyle w:val="Heading2"/>`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the page titles are not headings, %q is missing", want)
+		}
+	}
+	// The contents are a real field, with the entries written out.
+	if !strings.Contains(doc, `<w:docPartGallery w:val="Table of Contents"/>`) {
+		t.Errorf("the table of contents is not a field:\n%s", doc)
+	}
+	if !strings.Contains(doc, `w:anchor="page-2"`) {
+		t.Error("the contents entries do not link to the pages")
+	}
+	// The properties reached the package.
+	core := partOf(t, out.Bytes(), "docProps/core.xml")
+	for _, want := range []string{"Product documentation", "Jane Doe", "Internal"} {
+		if !strings.Contains(core, want) {
+			t.Errorf("document property %q is missing:\n%s", want, core)
+		}
+	}
+	if custom := partOf(t, out.Bytes(), "docProps/custom.xml"); !strings.Contains(custom, "Confluence page ID") {
+		t.Errorf("the custom properties are missing:\n%s", custom)
+	}
+}
+
+type noAssets struct{}
+
+func (noAssets) ResolveURL(raw string) (string, error) { return raw, nil }
+func (noAssets) FetchImage(context.Context, string) ([]byte, string, error) {
+	return nil, "", errors.New("no images in this test")
+}
+
+func twoLevelTree() *exporter.Node {
+	page := func(id, title, body string) confluence.Page {
+		return confluence.Page{
+			PageSummary: confluence.PageSummary{ID: id, Title: title}, BodyHTML: body,
+		}
+	}
+	return &exporter.Node{
+		Page: page("1", "Root page", "<p>Root body.</p>"), Number: "1",
+		Children: []*exporter.Node{{
+			Page: page("2", "Child page", "<p>Child body.</p>"), Depth: 1, Number: "1.1",
+		}},
 	}
 }

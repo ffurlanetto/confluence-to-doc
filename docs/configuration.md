@@ -42,6 +42,7 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `EXPORT_STORAGE_DIR`           | `./data/exports`        | Directory of generated documents in local storage (ignored when S3 is enabled) |
 | `SOFFICE_PATH`                 | `soffice`               | LibreOffice binary                                              |
 | `WORD_TEMPLATE_PATH`           | _(empty)_               | Company Word template applied to every document                 |
+| `DOCUMENT_CLASSIFICATION`      | _(empty)_               | Written to the subject property of every document (Word and PDF) |
 
 ## Telemetry (OpenTelemetry)
 

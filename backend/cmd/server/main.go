@@ -126,6 +126,7 @@ func run() error {
 			MaxImageBytes:     cfg.Export.MaxImageBytes,
 			ConfluenceWorkers: cfg.Export.ConfluenceWorkers,
 			UseTemplateStyles: template != nil,
+			Classification:    cfg.Export.Classification,
 			ShutdownGrace:     20 * time.Second,
 		})
 		notify = pool.Notify

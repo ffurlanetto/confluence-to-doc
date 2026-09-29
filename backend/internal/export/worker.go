@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,9 @@ type WorkerConfig struct {
 	// UseTemplateStyles tells the renderer to leave typography to the
 	// company Word template instead of styling the document itself.
 	UseTemplateStyles bool
+	// Classification is written to every document's subject property, for the
+	// document management systems that sort on it. Empty leaves it unset.
+	Classification string
 	// ShutdownGrace is how long in-flight jobs may run after shutdown starts
 	// before being released back to the queue.
 	ShutdownGrace time.Duration
@@ -274,11 +278,17 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	progress(pages, pages)
 
 	renderCtx, renderSpan := observability.Start(ctx, "document.render")
+	generatedAt := p.now()
 	html, err := exporter.RenderHTML(renderCtx, root, exporter.RenderOptions{
 		Title:             root.Page.Title,
 		SourceURL:         root.Page.WebURL,
-		GeneratedAt:       p.now(),
+		GeneratedAt:       generatedAt,
 		UseTemplateStyles: p.cfg.UseTemplateStyles,
+		Author:            p.author(ctx, client),
+		Description:       description(root, generatedAt),
+		Keywords:          keywords(root),
+		Classification:    p.cfg.Classification,
+		Properties:        properties(root, pages, generatedAt),
 	}, exporter.ConfluenceAssets{Client: client, MaxImageBytes: p.cfg.MaxImageBytes})
 	if err != nil {
 		observability.End(renderSpan, err)
@@ -346,4 +356,59 @@ func UserMessage(err error) string {
 	default:
 		return "A technical error occurred while generating the document."
 	}
+}
+
+// --- Document properties -----------------------------------------------------
+//
+// These end up in docProps, and therefore in the PDF as well. They are what a
+// document management system indexes, so they name the source precisely enough
+// to find the Confluence page the document came from.
+
+// author is the Confluence account whose token fetched the content, which is
+// the identity that actually performed the export. It is a courtesy, not a
+// requirement: a document with no author is still a valid document, so a
+// failure here is logged and ignored rather than failing the export.
+func (p *Pool) author(ctx context.Context, client *confluence.Client) string {
+	user, err := client.CurrentUser(ctx)
+	if err != nil {
+		slog.Debug("document author unavailable", "err", err)
+		return ""
+	}
+	if user.DisplayName != "" {
+		return user.DisplayName
+	}
+	return user.Username
+}
+
+func description(root *exporter.Node, at time.Time) string {
+	where := root.Page.Title
+	if root.Page.SpaceName != "" {
+		where += " (" + root.Page.SpaceName + ")"
+	}
+	return "Exported from Confluence: " + where + ", " + at.Format(time.RFC3339)
+}
+
+func keywords(root *exporter.Node) []string {
+	words := []string{"Confluence", "export"}
+	if root.Page.SpaceKey != "" {
+		words = append(words, root.Page.SpaceKey)
+	}
+	return words
+}
+
+func properties(root *exporter.Node, pages int, at time.Time) []exporter.Property {
+	props := []exporter.Property{
+		{Name: "Confluence page ID", Value: root.Page.ID},
+		{Name: "Confluence page title", Value: root.Page.Title},
+	}
+	if root.Page.SpaceKey != "" {
+		props = append(props, exporter.Property{Name: "Confluence space", Value: root.Page.SpaceKey})
+	}
+	if root.Page.WebURL != "" {
+		props = append(props, exporter.Property{Name: "Source URL", Value: root.Page.WebURL})
+	}
+	return append(props,
+		exporter.Property{Name: "Exported pages", Value: strconv.Itoa(pages)},
+		exporter.Property{Name: "Exported at", Value: at.Format(time.RFC3339)},
+	)
 }
