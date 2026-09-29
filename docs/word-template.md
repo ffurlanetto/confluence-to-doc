@@ -80,10 +80,16 @@ A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`
 - **Document properties** (title, author, description, keywords, classification, and custom properties
   naming the Confluence source) travel with the document into both the DOCX and the PDF.
 - Tables keep their visible borders from the export, not from a table style.
-- **Tables are scaled to the template's printable width.** The converter lays them out on its own page,
-  which is wider than most company templates; a table that would not fit the template's margins has its
-  columns scaled down proportionally rather than being cut off at the edge of the page. Narrower margins
-  therefore mean narrower tables, not truncated ones.
+- **Tables are laid out again to fit the printable width.** The converter sizes columns from their content
+  and readily overflows even its own page — a nine-column Confluence table came out half as wide again as
+  the text area. Rather than being cut off, the columns are redistributed: none goes below about 1.2 cm,
+  and what that costs is taken from the columns that have room to spare. List indents inside a narrow cell
+  are brought back in proportion, or a bullet would be indented past its own text.
+- **A table portrait cannot hold gets a landscape page of its own.** When squeezing it would flatten two
+  or more columns onto that minimum, the table is put in its own landscape section — the same paper, the
+  same margins, the same header and footer, only turned — and the document returns to portrait
+  immediately after. Nothing in the template needs to allow for it; the landscape page is derived from
+  whatever page the template defines.
 - **A paragraph is not split across two pages.** A block — paragraph, list item, quotation, code block or
   heading — that does not fit in what is left of the page moves to the next one whole. A block taller than
   a page still has to break, and it does.
@@ -143,7 +149,8 @@ re-validated.
 | Lists lose their bullets                        | The export brings its own list definitions; check the template's numbering is not corrupted by a Word add-in. |
 | The PDF has no bookmarks                        | The template's heading styles carry no outline level. Base them on Word's built-in `Heading 1…6`. |
 | The PDF uses the wrong font, the DOCX is fine   | The font is not installed in the image; see [Fonts in the PDF](#fonts-in-the-pdf). |
-| Wide tables have tiny columns                   | They are scaled to fit the template's printable width. Widen the margins, or set the page to landscape, in the template. |
+| A table appears on a sideways page              | It could not be read on a portrait one. Widening the template's margins, or setting a larger paper size, raises the threshold — the decision is made against the page the template defines. |
+| A table is still cramped                        | It was not wide enough to be turned but not narrow enough to be comfortable. Widen the template's margins. |
 | Pages end with a lot of white space             | A block that did not fit was moved whole to the next page rather than being split. Shorter paragraphs and code blocks reduce it. |
 
 If the template cannot be applied to a document, that export fails immediately with an explicit message

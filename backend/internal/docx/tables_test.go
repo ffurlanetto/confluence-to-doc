@@ -80,14 +80,6 @@ var (
 	reTestTblW    = regexp.MustCompile(`<w:tblW w:w="(\d+)" w:type="dxa"/>`)
 )
 
-func sum(v []int) int {
-	total := 0
-	for _, n := range v {
-		total += n
-	}
-	return total
-}
-
 func TestFitTablesScalesAnOversizedTable(t *testing.T) {
 	const available = 9070
 	body := "<w:p/>" + table(1283, 1268, 1268, 1268, 1268, 1268, 1268, 1314) + "<w:p/>"
@@ -216,5 +208,124 @@ func TestFitTablesIgnoresANestedGridWhenMeasuring(t *testing.T) {
 	}
 	if grid := widths(t, got, reTestGridCol); grid[0] != 250 || grid[1] != 250 {
 		t.Errorf("nested grid = %v, want it halved with its parent", grid)
+	}
+}
+
+func TestRedistributeHoldsNarrowColumnsAboveTheFloor(t *testing.T) {
+	// The column widths LibreOffice produced for a nine-column Confluence
+	// table: 16099 twips, against a printable width of 9070.
+	columns := []int{2870, 2330, 1100, 1475, 875, 1550, 1839, 1250, 2810}
+	const available = 9070
+
+	got := redistribute(columns, available)
+
+	if len(got) != len(columns) {
+		t.Fatalf("got %d columns, want %d", len(got), len(columns))
+	}
+	if total := sum(got); total > available {
+		t.Errorf("columns total %d, the page holds %d: %v", total, available, got)
+	}
+	if total := sum(got); total < available-len(got) {
+		t.Errorf("columns total %d, expected about %d: %v", total, available, got)
+	}
+	for i, w := range got {
+		if w < minColumnWidth {
+			t.Errorf("column %d is %d twips wide, below the floor of %d: %v", i, w, minColumnWidth, got)
+		}
+	}
+	// Plain proportional scaling would have left the narrowest column at
+	// 875*9070/16099 = 493 twips, about two characters.
+	if got[4] <= 493 {
+		t.Errorf("the narrowest column was not rescued: %d", got[4])
+	}
+	// Columns keep their order: what was widest stays widest.
+	if got[0] < got[2] || got[8] < got[4] {
+		t.Errorf("the column order changed: %v", got)
+	}
+}
+
+func TestRedistributeWithMoreColumnsThanRoom(t *testing.T) {
+	// Twenty columns cannot all have the floor; they share what there is.
+	columns := make([]int, 20)
+	for i := range columns {
+		columns[i] = 1000
+	}
+	got := redistribute(columns, 5000)
+
+	if total := sum(got); total > 5000 {
+		t.Errorf("columns total %d, the page holds 5000: %v", total, got)
+	}
+	for i, w := range got {
+		if w < 1 {
+			t.Errorf("column %d vanished: %v", i, got)
+		}
+	}
+}
+
+func TestFitTableGivesEveryCellTheWidthOfItsColumns(t *testing.T) {
+	const table = `<w:tbl><w:tblPr><w:tblW w:w="12000" w:type="dxa"/></w:tblPr>` +
+		`<w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid>` +
+		`<w:tr>` +
+		`<w:tc><w:tcPr><w:tcW w:w="8000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc>` +
+		`<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p/></w:tc>` +
+		`</w:tr></w:tbl>`
+
+	got := fitTable(table, 6000)
+
+	grid := widths(t, got, reTestGridCol)
+	if sum(grid) > 6000 {
+		t.Errorf("the grid does not fit: %v", grid)
+	}
+	cells := widths(t, got, reTestTcW)
+	if len(cells) != 2 {
+		t.Fatalf("got %d cells, want 2: %v", len(cells), cells)
+	}
+	// A cell spanning two columns is as wide as both of them.
+	if want := grid[0] + grid[1]; cells[0] != want {
+		t.Errorf("the spanning cell is %d wide, its columns are %d", cells[0], want)
+	}
+	if cells[1] != grid[2] {
+		t.Errorf("the plain cell is %d wide, its column is %d", cells[1], grid[2])
+	}
+}
+
+func TestFitTableBringsListIndentsBackIntoNarrowCells(t *testing.T) {
+	// LibreOffice indents a bullet by 709 twips whatever the column is worth.
+	const bullet = `<w:p><w:pPr><w:ind w:left="709" w:hanging="283"/></w:pPr><w:r><w:t>cpu: 16 vCPU</w:t></w:r></w:p>`
+	table := `<w:tbl><w:tblPr><w:tblW w:w="12000" w:type="dxa"/></w:tblPr>` +
+		`<w:tblGrid><w:gridCol w:w="6000"/><w:gridCol w:w="6000"/></w:tblGrid>` +
+		`<w:tr><w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr>` + bullet + `</w:tc>` +
+		`<w:tc><w:tcPr><w:tcW w:w="6000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>`
+
+	got := fitTable(table, 2000)
+
+	left := widths(t, got, regexp.MustCompile(`<w:ind w:left="(\d+)"`))
+	if len(left) != 1 {
+		t.Fatalf("expected one indented paragraph, got %v", left)
+	}
+	cell := widths(t, got, reTestGridCol)[0]
+	if left[0] > cell/maxIndentShare {
+		t.Errorf("indent %d eats a %d twip cell", left[0], cell)
+	}
+	// The bullet must not end up further right than its own text.
+	hanging := widths(t, got, regexp.MustCompile(`w:hanging="(\d+)"`))
+	if len(hanging) != 1 || hanging[0] > left[0] {
+		t.Errorf("hanging indent %v does not fit the left indent %v", hanging, left)
+	}
+	if !strings.Contains(got, "cpu: 16 vCPU") {
+		t.Error("the cell content was lost")
+	}
+}
+
+func TestFitTableLeavesRoomyCellIndentsAlone(t *testing.T) {
+	const bullet = `<w:p><w:pPr><w:ind w:left="709" w:hanging="283"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p>`
+	table := `<w:tbl><w:tblPr><w:tblW w:w="12000" w:type="dxa"/></w:tblPr>` +
+		`<w:tblGrid><w:gridCol w:w="12000"/></w:tblGrid>` +
+		`<w:tr><w:tc><w:tcPr><w:tcW w:w="12000" w:type="dxa"/></w:tcPr>` + bullet + `</w:tc></w:tr></w:tbl>`
+
+	got := fitTable(table, 9000)
+
+	if !strings.Contains(got, `<w:ind w:left="709" w:hanging="283"/>`) {
+		t.Errorf("an indent that fits was changed:\n%s", got)
 	}
 }

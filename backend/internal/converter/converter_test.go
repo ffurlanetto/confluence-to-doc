@@ -428,3 +428,75 @@ func twoLevelTree() *exporter.Node {
 		}},
 	}
 }
+
+// TestConvertFitsAWideConfluenceTable uses the shape that showed the problem in
+// practice: nine columns, one of them a bullet list. LibreOffice sizes such a
+// table half as wide again as its own page, so this is the case where the
+// widths have to be laid out again rather than merely scaled.
+func TestConvertFitsAWideConfluenceTable(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
+		`<table border="1" cellpadding="4"><tbody><tr>`)
+	for _, head := range []string{"Environment", "Service Name", "Type", "FQDN / Server Name",
+		"Data Centre", "IP", "Details", "Additional Setup", "IV2 Link"} {
+		fmt.Fprintf(&b, "<th>%s</th>", head)
+	}
+	b.WriteString(`</tr><tr><td>AGASSI-PRD-TOMCAT-1</td><td>SVC2AUXAGASSIP</td><td>Red Hat 8.8 (VMware)</td>` +
+		`<td>eurvlii74826.xmp.net.intra</td><td>ME</td><td>10.118.170.65</td>` +
+		`<td><ul><li>cpu: 16 vCPU</li><li>ram: 64 GB</li><li>data_disk_size: 150 Go</li></ul></td>` +
+		`<td></td><td>AGASSI-PRD-REDHAT-1 (group.echonet)</td></tr></tbody></table></body></html>`)
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, []byte(b.String()), domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	// A4 turned sideways, less the template's margins.
+	const printable = 16838 - 1134 - 1134
+	columns := regexp.MustCompile(`<w:gridCol w:w="(\d+)"/>`).FindAllStringSubmatch(doc, -1)
+	if len(columns) != 9 {
+		t.Fatalf("got %d columns, want 9", len(columns))
+	}
+	total, narrowest := 0, 1<<30
+	for _, m := range columns {
+		w, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("unparsable column width %q", m[1])
+		}
+		total += w
+		narrowest = min(narrowest, w)
+	}
+	if total > printable {
+		t.Errorf("the table is %d twips wide, the company page holds %d", total, printable)
+	}
+	// Every column has to stay wide enough to read: scaling this table down
+	// proportionally would leave the narrowest at about 490 twips, roughly two
+	// characters, and set its heading one letter per line.
+	if narrowest < 700 {
+		t.Errorf("the narrowest column is %d twips, too narrow to read", narrowest)
+	}
+	// Nine columns do not belong on a portrait page: the table gets a
+	// landscape section of its own, and the document returns to portrait.
+	if !strings.Contains(doc, `w:orient="landscape"`) {
+		t.Errorf("the table was left on a portrait page:\n%s", doc)
+	}
+	if n := strings.Count(doc, "<w:sectPr>"); n != 3 {
+		t.Errorf("got %d sections, want portrait/landscape/portrait", n)
+	}
+
+	// A bullet in a narrow cell must not be indented past its own text.
+	for _, m := range regexp.MustCompile(`<w:ind w:left="(\d+)"`).FindAllStringSubmatch(doc, -1) {
+		left, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if left >= narrowest {
+			t.Errorf("an indent of %d twips does not fit a %d twip column", left, narrowest)
+		}
+	}
+}

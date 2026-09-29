@@ -21,7 +21,7 @@ documentation.
 | `<dl>`, `<dt>`, `<dd>` | `ListHeading` / `ListContents` styles | ✅ structure kept, styles are LibreOffice's |
 | `<blockquote>` | `Quotations` style, indented | ✅ mapped to the template's **Quote** style when it defines one |
 | `<pre>` | `PreformattedText` style, runs in `SourceText` | ✅ monospace survives on the runs |
-| `<table>` | `w:tbl` with a fixed grid | ✅ scaled to the page — see [word-template.md](word-template.md) |
+| `<table>` | `w:tbl` with a fixed grid | ✅ columns laid out again to fit the page; a table too wide for portrait gets a landscape section |
 | `<thead>` | `w:tblHeader` on the row | ✅ the header row repeats on every page |
 | `<th>` | `TableHeading` style (bold, centred) | ✅ bold kept even when the template names no such style |
 | `colspan` / `rowspan` | `w:gridSpan` / `w:vMerge` | ✅ |
@@ -106,3 +106,6 @@ Updating the field in Word regenerates the entries from the heading styles. The 
 - Confluence's coloured panels become plain paragraphs.
 - `<details>` is always expanded.
 - A `<caption>` is a centred paragraph rather than a *Caption* style.
+- A table that portrait cannot hold is moved to a landscape section of its own, derived from the
+  template's page. One that is merely tight stays where it is, with its columns held above a readable
+  minimum.
