@@ -723,6 +723,11 @@ func Polish(generated []byte) ([]byte, error) {
 		return generated, nil
 	}
 	polished := insertTOC(string(doc), tocEntryStyles(parseStyles(string(parts[partStyles]))))
+	// The converter overflows its own page for a table with many columns, so
+	// the widths need bringing back even when no template narrows the page.
+	if sectPr, err := extractSectPr(string(doc)); err == nil {
+		polished = fitTables(polished, textWidthOf(sectPr))
+	}
 	if polished == string(doc) {
 		return generated, nil
 	}

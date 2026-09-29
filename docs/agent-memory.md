@@ -57,10 +57,20 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
 - LibreOffice's own DOCX has **no theme part at all** and never emits `w:themeColor`. A company theme can
   therefore only come from the template, and it does: part, relationship and content type all survive the
   merge, so styles referencing `accent1` or the hyperlink colour resolve.
-- **Tables are sized for LibreOffice's own page.** Its HTML import uses A4 with 1134/567 twip margins, so
-  it fits every table into 10205 twips and writes the result as absolute `dxa` widths with
-  `<w:tblLayout w:type="fixed"/>`. A company template with 2.5 cm margins leaves only 9070 — which is why
-  `docx.fitTables` rescales tables as the section properties are swapped.
+- **Tables are sized from their content, and overflow the page.** The HTML import uses A4 with 1134/567
+  twip margins (10205 of text) and writes absolute `dxa` widths with `<w:tblLayout w:type="fixed"/>` — but
+  it does **not** clamp to that width: a nine-column Confluence table came out at 16099 twips, 58% over.
+  So `docx.fitTables` runs whether or not a template narrows the page.
+- Nothing in the HTML changes that layout. `width="100%"` on the table, `table-layout: fixed`,
+  `word-wrap: break-word` — all four variants produced a byte-identical grid. The fix has to be in the
+  DOCX step.
+- **Scaling proportionally is not enough.** LibreOffice's narrow columns are already close to unreadable,
+  and the same factor finishes them off: a "Data Centre" heading set one letter per line. `redistribute`
+  holds every column above a floor (`minColumnWidth`, ~1.2 cm) and takes the cost from the columns above
+  it.
+- A **bullet inside a table cell** carries `<w:ind w:left="709"/>` whatever the column is worth. In a
+  squeezed cell that leaves a couple of characters per line, which looks far worse than the column width
+  alone suggests. `capIndents` bounds it to a quarter of the cell.
 - **CSS widths on tables are ignored**, both `table { width: … }` and `<col style="width: …">`. LibreOffice
   sizes columns from their content. The HTML *attribute* `width="100%"` is honoured, and is the only way
   to get a relative `<w:tblW w:type="pct"/>` out of the import.
