@@ -469,3 +469,43 @@ func TestApplyPreservesEscapedHyperlinkTargets(t *testing.T) {
 		t.Error("the hyperlink relationship is missing from the result")
 	}
 }
+
+func TestApplyFitsTablesToTheTemplatePage(t *testing.T) {
+	// The template's page (A4, 1134 twip margins) leaves 9638 twips of text;
+	// LibreOffice sized this table for its own, wider page.
+	const oversized = `<w:tbl><w:tblPr><w:tblW w:w="10205" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr>` +
+		`<w:tblGrid><w:gridCol w:w="5000"/><w:gridCol w:w="5205"/></w:tblGrid>` +
+		`<w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>wide</w:t></w:r></w:p></w:tc>` +
+		`<w:tc><w:tcPr><w:tcW w:w="5205" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>`
+
+	parts := generatedParts()
+	parts[partDocument] = []byte(strings.Replace(generatedDocument, "<w:tbl>", oversized+"<w:tbl>", 1))
+
+	tpl := loadFixtureTemplate(t)
+	if tpl.textWidth != 9638 {
+		t.Fatalf("fixture template text width = %d, want 9638", tpl.textWidth)
+	}
+	result, err := tpl.Apply(buildZip(t, parts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := readZip(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc := string(out[partDocument])
+	total := 0
+	for _, col := range reGridCol.FindAllString(doc, -1) {
+		total += intAttr(col, reWidthAttr)
+	}
+	if total == 0 {
+		t.Fatal("the table grid disappeared from the result")
+	}
+	if total > tpl.textWidth {
+		t.Errorf("table is %d twips wide, the template page holds %d", total, tpl.textWidth)
+	}
+	if !strings.Contains(doc, "wide") {
+		t.Error("the table content was lost")
+	}
+}

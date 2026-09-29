@@ -55,6 +55,13 @@ A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`
   `TableContents`) is remapped to the template's default paragraph style. This is what makes the company
   font win; it also means a style you did not define cannot be honoured.
 - Tables keep their visible borders from the export, not from a table style.
+- **Tables are scaled to the template's printable width.** The converter lays them out on its own page,
+  which is wider than most company templates; a table that would not fit the template's margins has its
+  columns scaled down proportionally rather than being cut off at the edge of the page. Narrower margins
+  therefore mean narrower tables, not truncated ones.
+- **A paragraph is not split across two pages.** A block — paragraph, list item, quotation, code block or
+  heading — that does not fit in what is left of the page moves to the next one whole. A block taller than
+  a page still has to break, and it does.
 - Bold, italics, code blocks and image sizes are direct formatting and are preserved.
 
 ### Fonts in the PDF
@@ -106,6 +113,8 @@ re-validated.
 | Lists lose their bullets                        | The export brings its own list definitions; check the template's numbering is not corrupted by a Word add-in. |
 | The PDF has no bookmarks                        | The template's heading styles carry no outline level. Base them on Word's built-in `Heading 1…6`. |
 | The PDF uses the wrong font, the DOCX is fine   | The font is not installed in the image; see [Fonts in the PDF](#fonts-in-the-pdf). |
+| Wide tables have tiny columns                   | They are scaled to fit the template's printable width. Widen the margins, or set the page to landscape, in the template. |
+| Pages end with a lot of white space             | A block that did not fit was moved whole to the next page rather than being split. Shorter paragraphs and code blocks reduce it. |
 
 If the template cannot be applied to a document, that export fails immediately with an explicit message
 rather than being retried — the failure is deterministic — and no half-formatted document is ever

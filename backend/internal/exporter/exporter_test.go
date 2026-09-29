@@ -119,11 +119,11 @@ func TestRenderHTML(t *testing.T) {
 
 	mustContain := []string{
 		`<h1 id="page-1"`, `1 Root</h1>`, // root title is h1
-		`<h2>Intro</h2>`,                      // body h1 shifted under the page title
+		`Intro</h2>`,                          // body h1 shifted under the page title
 		`<h2 id="page-2"`, `1.1 Child A</h2>`, // children are h2
-		`<h4>Section</h4>`, // body h2 of a depth-1 page
+		`Section</h4>`, // body h2 of a depth-1 page
 		`<h3 id="page-4"`, `1.1.1 Grandchild &lt;x&gt;</h3>`,
-		`<h6>Deep</h6>`,               // capped at h6
+		`Deep</h6>`,                   // capped at h6
 		`href="#page-4"`,              // internal link rewritten
 		`/display/X/Other"`,           // external link made absolute
 		`src="data:image/png;base64,`, // image inlined
@@ -160,5 +160,51 @@ func TestRenderHTMLHonoursCancellation(t *testing.T) {
 	cancel()
 	if _, err := exporter.RenderHTML(ctx, root, exporter.RenderOptions{Title: "R"}, failingAssets{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
+	}
+}
+
+func TestRenderKeepsBlocksWholeOnOnePage(t *testing.T) {
+	const keep = "page-break-inside: avoid"
+	body := `<p>plain</p><ul><li>item</li></ul><blockquote>quoted</blockquote><pre>code</pre>` +
+		`<p style="color: red">already styled</p><p style="page-break-inside: auto">page decides</p>` +
+		`<table><tbody><tr><td><p>in a cell</p></td></tr></tbody></table>`
+	root := &exporter.Node{Page: confluence.Page{
+		PageSummary: confluence.PageSummary{ID: "1", Title: "Root"}, BodyHTML: body,
+	}}
+
+	out, err := exporter.RenderHTML(context.Background(), root,
+		exporter.RenderOptions{Title: "Root", GeneratedAt: time.Now()}, failingAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(out)
+
+	// LibreOffice maps this declaration to w:keepLines. It has to be inline:
+	// a stylesheet rule becomes a paragraph style, and a Word template
+	// replaces the converter's styles with its own.
+	for _, want := range []string{
+		`<p style="` + keep + `">plain</p>`,
+		`<li style="` + keep + `">item</li>`,
+		`<blockquote style="` + keep + `">quoted</blockquote>`,
+		`<pre style="` + keep + `">code</pre>`,
+		`<p style="color: red; ` + keep + `">already styled</p>`,
+		`<p style="` + keep + `">in a cell</p>`,
+		`<p class="doc-title" style="` + keep + `">Root</p>`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("output does not contain %q", want)
+		}
+	}
+	// A page that decides for itself keeps its declaration.
+	if !strings.Contains(doc, `<p style="page-break-inside: auto">page decides</p>`) {
+		t.Error("an explicit page-break-inside from the page was overridden")
+	}
+	// Headings still start a new page, and stay whole.
+	if !strings.Contains(doc, `style="page-break-before: always; `+keep+`"`) {
+		t.Error("page headings lost either their page break or their keep-together")
+	}
+	// Table rows are not kept together: a long table has to break somewhere.
+	if strings.Contains(doc, `<tr style=`) || strings.Contains(doc, `<td style=`) {
+		t.Error("table rows/cells must not be kept together")
 	}
 }

@@ -86,6 +86,10 @@ Queue robustness:
 - images are downloaded with the user's PAT (same origin only), resized to the printable width and
   embedded as data URIs; an unreachable image degrades to its alternative text;
 - links to pages included in the export become internal anchors, other links become absolute URLs;
+- paragraphs, list items, quotations, code blocks and headings carry `page-break-inside: avoid`, so a
+  block that no longer fits moves to the next page whole instead of being cut in two. It is written as an
+  inline style on purpose: LibreOffice turns a stylesheet rule into a paragraph style, which the Word
+  template merge would discard;
 - sanitisation: scripts, iframes, forms and event handlers are removed.
 
 ### Company Word template
@@ -98,7 +102,10 @@ Two consequences shape the pipeline:
 
 - the HTML is rendered **without** its own typography, because the converter would turn font declarations
   into direct formatting that overrides the template's styles;
-- PDFs are produced from the templated DOCX rather than from the HTML, so both formats share one layout.
+- PDFs are produced from the templated DOCX rather than from the HTML, so both formats share one layout;
+- tables are rescaled as the template's page setup replaces the converter's. LibreOffice lays tables out
+  on its own, wider page and records absolute column widths; without the rescale, a table wider than the
+  company margins is simply clipped by the reader.
 
 Details and authoring guidance: [word-template.md](word-template.md).
 

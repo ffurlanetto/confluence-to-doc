@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -222,5 +224,85 @@ func TestConvertPDFWithCompanyTemplate(t *testing.T) {
 	}
 	if !bytes.HasPrefix(out.Bytes(), []byte("%PDF-")) {
 		t.Fatalf("output is not a PDF: %q", out.Bytes()[:min(16, out.Len())])
+	}
+}
+
+// wideSample mirrors what exporter.RenderHTML produces: a table LibreOffice
+// sizes for its own, wider page, and blocks carrying the inline
+// `page-break-inside: avoid` that the renderer adds to every paragraph.
+func wideSample() []byte {
+	var heads, cells strings.Builder
+	for i := 1; i <= 8; i++ {
+		fmt.Fprintf(&heads, "<th>Heading number %d of the table</th>", i)
+		fmt.Fprintf(&cells, "<td>Cell %d with a reasonably long sentence that must wrap</td>", i)
+	}
+	return []byte(`<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
+		`<p style="page-break-inside: avoid">Before.</p>` +
+		`<table border="1" cellpadding="4"><tbody><tr>` + heads.String() + `</tr><tr>` + cells.String() + `</tr></tbody></table>` +
+		`<p style="page-break-inside: avoid">After.</p></body></html>`)
+}
+
+func documentXML(t *testing.T, docxBytes []byte) string {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(docxBytes), int64(len(docxBytes)))
+	if err != nil {
+		t.Fatalf("result is not a DOCX package: %v", err)
+	}
+	for _, f := range zr.File {
+		if f.Name != "word/document.xml" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rc.Close()
+		content, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(content)
+	}
+	t.Fatal("word/document.xml missing")
+	return ""
+}
+
+// TestConvertFitsTablesToTheTemplatePage is the end-to-end check for the two
+// layout rules: a table has to stay inside the printable width of the company
+// page, and a paragraph must not be split across two pages. Both depend on how
+// this LibreOffice version maps our HTML, which only a real conversion shows.
+func TestConvertFitsTablesToTheTemplatePage(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, wideSample(), domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	// The template's page: A4 less 1134 twips of margin on each side.
+	const printable = 11906 - 1134 - 1134
+	total := 0
+	columns := regexp.MustCompile(`<w:gridCol w:w="(\d+)"/>`).FindAllStringSubmatch(doc, -1)
+	if len(columns) == 0 {
+		t.Fatal("the converted document has no table grid")
+	}
+	for _, m := range columns {
+		w, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("unparsable column width %q", m[1])
+		}
+		total += w
+	}
+	if total > printable {
+		t.Errorf("table is %d twips wide, the company page holds %d", total, printable)
+	}
+
+	// `page-break-inside: avoid` has to survive as direct formatting: the
+	// template replaced the converter's styles with its own.
+	if !strings.Contains(doc, "<w:keepLines/>") {
+		t.Error("paragraphs are not kept whole: no w:keepLines in the templated document")
 	}
 }

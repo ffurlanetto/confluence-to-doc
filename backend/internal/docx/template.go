@@ -61,6 +61,9 @@ type Template struct {
 	styleIDs              map[string]bool
 	defaultParagraphStyle string
 	sectPr                string
+	// textWidth is the printable width of the template's page, in twips; 0 when
+	// the template does not say.
+	textWidth int
 
 	maxAbstractNumID int
 	maxNumID         int
@@ -102,6 +105,7 @@ func parseTemplate(data []byte) (*Template, error) {
 		parts:                 parts,
 		order:                 order,
 		sectPr:                sectPr,
+		textWidth:             textWidthOf(sectPr),
 		styleIDs:              styleIDsOf(styles),
 		defaultParagraphStyle: defaultParagraphStyleOf(styles),
 	}
@@ -195,6 +199,11 @@ func (t *Template) Apply(generated []byte) ([]byte, error) {
 	// paragraph style, so text inherits the company fonts instead of the
 	// converter's.
 	body = t.remapStyles(body)
+
+	// Tables: LibreOffice sized them for its own, wider page. The template's
+	// page replaces it just below, so anything too wide is scaled down now
+	// rather than clipped by the reader.
+	body = fitTables(body, t.textWidth)
 
 	add(partDocument, []byte(prologue+body+t.sectPr+"</w:body></w:document>"))
 	add(partDocumentRels, []byte(rels.marshal()))

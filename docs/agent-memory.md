@@ -31,6 +31,18 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   conversions collide over a shared profile.
 - LibreOffice invents style names (`BodyText`, `TableContents`, `PreformattedText`, `BodyTextdoc-title`).
   Only `Heading1…6` overlaps with what a Word template defines — everything else is remapped.
+- **Tables are sized for LibreOffice's own page.** Its HTML import uses A4 with 1134/567 twip margins, so
+  it fits every table into 10205 twips and writes the result as absolute `dxa` widths with
+  `<w:tblLayout w:type="fixed"/>`. A company template with 2.5 cm margins leaves only 9070 — which is why
+  `docx.fitTables` rescales tables as the section properties are swapped.
+- **CSS widths on tables are ignored**, both `table { width: … }` and `<col style="width: …">`. LibreOffice
+  sizes columns from their content. The HTML *attribute* `width="100%"` is honoured, and is the only way
+  to get a relative `<w:tblW w:type="pct"/>` out of the import.
+- **`page-break-inside: avoid` maps to `<w:keepLines/>`** — on `p`, `li`, `blockquote`, `pre` and headings.
+  Where it lands depends on how it is written: a **stylesheet rule** becomes part of a generated paragraph
+  style (which the Word template merge throws away), an **inline style** becomes direct formatting on the
+  paragraph (which survives). The renderer therefore writes it inline; see `exporter.keepTogether`.
+- `page-break-after: avoid` is **not** mapped: LibreOffice emits no `<w:keepNext/>` for it.
 
 ### Word template (`internal/docx`)
 
@@ -48,6 +60,10 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   retry would burn a LibreOffice run to reach the same error.
 - The merge manipulates OOXML as text. `TestApplyProducesWellFormedXML` parses every part of the result;
   keep that test green, it is the cheapest guard against a broken package.
+- Swapping the section properties changes the printable width under content that was already laid out.
+  `fitTables` scales table widths (`w:tblW`, `w:gridCol`, `w:tcW`, `dxa` only) by truncating integer
+  division, so the column grid can only end up narrower than the page, never wider. Nested tables are
+  scaled with the table that holds them, not measured against the page on their own.
 
 ### Telemetry (`internal/observability`)
 

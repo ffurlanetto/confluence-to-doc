@@ -24,6 +24,17 @@ import (
 // maxImageWidthPx keeps images inside an A4 page with default margins.
 const maxImageWidthPx = 640
 
+// keepTogether asks the converter not to break a block across two pages. A
+// paragraph cut in half reads badly, more so a short one, so the whole block
+// moves to the next page instead.
+//
+// It is written as an inline style on purpose. LibreOffice turns a stylesheet
+// rule into a paragraph style, and a Word template replaces the converter's
+// styles with its own — the setting would be lost exactly when a template is
+// configured. As direct formatting it survives, and it is pagination rather
+// than typography, so it does not fight the company look.
+const keepTogether = "page-break-inside: avoid"
+
 // Assets resolves resources referenced by page bodies.
 type Assets interface {
 	// ResolveURL makes a (possibly relative) Confluence URL absolute.
@@ -62,7 +73,7 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 	b.WriteString(`</title><style>` + css + `</style></head><body>`)
 
 	// Cover page.
-	fmt.Fprintf(&b, `<p class="doc-title">%s</p>`, html.EscapeString(opts.Title))
+	fmt.Fprintf(&b, `<p class="doc-title" style="%s">%s</p>`, keepTogether, html.EscapeString(opts.Title))
 	fmt.Fprintf(&b, `<p class="doc-meta">Exported from Confluence on %s</p>`, opts.GeneratedAt.Format("2006-01-02 15:04 MST"))
 	if opts.SourceURL != "" {
 		fmt.Fprintf(&b, `<p class="doc-meta">Source: <a href="%[1]s">%[1]s</a></p>`, html.EscapeString(opts.SourceURL))
@@ -72,7 +83,7 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 
 	// Table of contents (only meaningful when there is a hierarchy).
 	if count > 1 {
-		b.WriteString(`<p class="toc-title" style="page-break-before: always">Table of contents</p>`)
+		b.WriteString(`<p class="toc-title" style="page-break-before: always; ` + keepTogether + `">Table of contents</p>`)
 		root.Walk(func(n *Node) {
 			fmt.Fprintf(&b, `<p class="toc-entry" style="margin-left: %.1fcm"><a href="#%s">%s %s</a></p>`,
 				float64(n.Depth)*0.8, anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title))
@@ -89,8 +100,8 @@ func RenderHTML(ctx context.Context, root *Node, opts RenderOptions, assets Asse
 			return
 		}
 		level := min(n.Depth+1, 6)
-		fmt.Fprintf(&b, `<h%d id="%s" style="page-break-before: always"><a name="%s"></a>%s %s</h%d>`,
-			level, anchor(n.Page.ID), anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title), level)
+		fmt.Fprintf(&b, `<h%d id="%s" style="page-break-before: always; %s"><a name="%s"></a>%s %s</h%d>`,
+			level, anchor(n.Page.ID), keepTogether, anchor(n.Page.ID), n.Number, html.EscapeString(n.Page.Title), level)
 		body, err := r.transformBody(n.Page.BodyHTML, n.Depth+1)
 		if err != nil {
 			renderErr = fmt.Errorf("page %s: %w", n.Page.ID, err)
@@ -148,6 +159,13 @@ var droppedElements = map[atom.Atom]bool{
 
 var headingLevels = map[atom.Atom]int{atom.H1: 1, atom.H2: 2, atom.H3: 3, atom.H4: 4, atom.H5: 5, atom.H6: 6}
 
+// Blocks of text that should not be split across a page boundary. Table rows
+// are left out: a long table has to break somewhere.
+var keepTogetherElements = map[atom.Atom]bool{
+	atom.P: true, atom.Li: true, atom.Blockquote: true, atom.Pre: true, atom.Dt: true, atom.Dd: true,
+	atom.H1: true, atom.H2: true, atom.H3: true, atom.H4: true, atom.H5: true, atom.H6: true,
+}
+
 func (r *renderer) transformBody(body string, shift int) (string, error) {
 	parent := &nethtml.Node{Type: nethtml.ElementNode, Data: "div", DataAtom: atom.Div}
 	nodes, err := nethtml.ParseFragment(strings.NewReader(body), parent)
@@ -185,6 +203,9 @@ func (r *renderer) transformNode(n *nethtml.Node, shift int) {
 		return
 	}
 	stripEventHandlers(n)
+	if keepTogetherElements[n.DataAtom] {
+		appendStyle(n, keepTogether)
+	}
 
 	if lvl, ok := headingLevels[n.DataAtom]; ok {
 		newLvl := min(lvl+shift, 6)
@@ -238,6 +259,21 @@ func setAttr(n *nethtml.Node, key, val string) {
 		return
 	}
 	n.Attr = append(n.Attr, nethtml.Attribute{Key: key, Val: val})
+}
+
+// appendStyle adds a declaration to the element's inline style, keeping what
+// the page already declares.
+func appendStyle(n *nethtml.Node, decl string) {
+	style, _ := getAttr(n, "style")
+	current := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(style), ";"))
+	if current == "" {
+		setAttr(n, "style", decl)
+		return
+	}
+	if strings.Contains(current, strings.SplitN(decl, ":", 2)[0]) {
+		return // the page already decides this property
+	}
+	setAttr(n, "style", current+"; "+decl)
 }
 
 func removeAttr(n *nethtml.Node, key string) {
