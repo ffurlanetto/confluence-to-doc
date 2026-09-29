@@ -1,0 +1,68 @@
+# Runs a released image from the registry — nothing is built from source.
+#
+#   docker compose -f docker-compose.release.yml up -d
+#
+# Unlike docker-compose.yml, this stack has no mocks: it expects a real OIDC
+# provider and a real Confluence. Configure them in .env (see .env.example) and
+# the compose file refuses to start until the required ones are set.
+#
+# The image tag defaults to `latest`, which follows the newest vX.Y.Z release.
+# Pin it in production:  C2D_VERSION=1.2.3 docker compose -f … up -d
+# `edge` is the current main branch. See docs/releasing.md.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: c2d
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-c2d}
+      POSTGRES_DB: c2d
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U c2d"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    image: ghcr.io/ffurlanetto/confluence-to-doc:${C2D_VERSION:-latest}
+    # `latest` is a moving tag, so always check the registry on `up`. Harmless
+    # for a pinned version: the digest is already local after the first pull.
+    pull_policy: always
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgres://c2d:${POSTGRES_PASSWORD:-c2d}@db:5432/c2d?sslmode=disable
+      # Must be the URL browsers actually use: it is the OIDC redirect URI and
+      # the same-origin check.
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL in .env, e.g. http://localhost:8080}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:?set OIDC_ISSUER_URL in .env}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in .env}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET in .env}
+      CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:?set CONFLUENCE_BASE_URL in .env}
+      # 32 random bytes, base64: openssl rand -base64 32
+      # Changing it makes every stored Confluence token unreadable.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env (openssl rand -base64 32)}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      # Empty disables telemetry; point it at a collector to enable it.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: confluence-to-doc
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    volumes:
+      # Generated documents. API and worker run in the same container here, so
+      # local storage is enough; set S3_BUCKET in .env to use object storage.
+      - exports:/data
+      # To apply the company Word template, mount it and set WORD_TEMPLATE_PATH
+      # in .env (see docs/word-template.md):
+      #   - ./company-template.dotx:/etc/c2d/template.dotx:ro
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  exports:
