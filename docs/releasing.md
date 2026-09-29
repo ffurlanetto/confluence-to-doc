@@ -44,7 +44,7 @@ Only `vMAJOR.MINOR.PATCH` tags publish a release; anything else is ignored. A pr
 - The manifest is read back and the job fails unless it really contains both platforms — a partial join
   would otherwise publish an image that silently does not run on half the fleet.
 - `VERSION` is passed as a build argument and compiled into the binary, so a running container reports the
-  version it was built from:
+  tag it was published under — `1.2.3` from a release tag, `edge` from `main`:
 
   ```
   msg=starting version=1.2.3 role=all
