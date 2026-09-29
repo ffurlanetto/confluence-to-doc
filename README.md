@@ -97,6 +97,7 @@ Details in [docs/architecture.md](docs/architecture.md); decisions in [docs/adr/
 | [docs/configuration.md](docs/configuration.md)       | Every environment variable, deployment notes               |
 | [docs/word-template.md](docs/word-template.md)       | Preparing and troubleshooting the company Word template    |
 | [docs/agent-memory.md](docs/agent-memory.md)         | Durable project memory for AI agents and new contributors  |
+| [docs/releasing.md](docs/releasing.md)               | Publishing the container image, tags, cutting a release    |
 | [charts/confluence-to-doc/](charts/confluence-to-doc/) | Helm chart: values, storage choices, operational notes   |
 | [docs/adr/](docs/adr/)                               | Architecture decision records                              |
 | [CLAUDE.md](CLAUDE.md)                               | Entry point for AI coding agents                           |
@@ -135,5 +136,5 @@ frontend/src/
   api/              typed HTTP client + React Query hooks
   pages/            screens (exports, new export, preferences)
   components/       shared components
-docs/               architecture, configuration, Word template, agent memory, ADRs
+docs/               architecture, configuration, Word template, releasing, agent memory, ADRs
 ```

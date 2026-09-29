@@ -22,6 +22,9 @@ helm upgrade --install confluence-to-doc ./charts/confluence-to-doc \
   -n confluence-to-doc -f charts/confluence-to-doc/values-production.yaml
 ```
 
+The image tag defaults to the chart's `appVersion`; see [docs/releasing.md](../../docs/releasing.md)
+for the tags that are published and how a release is cut.
+
 A bare `helm install` is refused on purpose: the chart checks up front that it has a public URL, a
 database, an OIDC client, an encryption key and somewhere to put documents, and tells you which one is
 missing rather than leaving pods to crash-loop.
