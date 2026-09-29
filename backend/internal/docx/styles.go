@@ -36,25 +36,49 @@ func normaliseName(name string) string {
 	return strings.Join(strings.Fields(strings.ToLower(name)), " ")
 }
 
-// wordStyleNames translates the names LibreOffice gives its own styles, and the
-// names that come from this exporter's CSS classes, into the Word built-in
-// names a company template is likely to define. Only concepts that really
-// correspond are listed: a template that defines none of them is no worse off.
+// The style names LibreOffice gives paragraphs styled by one of this
+// exporter's CSS classes are built from the class *and* from its own base
+// style, whose name changes between LibreOffice versions ("Body Text.toc-entry-2"
+// in one, "Text Body.toc-entry-2" in another). Only the suffix is ours, so only
+// the suffix is matched.
+var reClassSuffix = regexp.MustCompile(`\.([a-z-]+?)(?:-([1-9]))?$`)
+
+// wordStyleNames translates the names LibreOffice gives its own styles into the
+// Word built-in names a company template is likely to define. Only concepts
+// that really correspond are listed: a template that defines none of them is no
+// worse off.
 var wordStyleNames = map[string]string{
-	"quotations":            "quote",
-	"preformatted text":     "html preformatted",
-	"text body.doc-title":   "title",
-	"text body.doc-meta":    "subtitle",
-	"text body.toc-title":   "toc heading",
-	"text body.toc-entry-1": "toc 1",
-	"text body.toc-entry-2": "toc 2",
-	"text body.toc-entry-3": "toc 3",
-	"text body.toc-entry-4": "toc 4",
-	"text body.toc-entry-5": "toc 5",
-	"text body.toc-entry-6": "toc 6",
-	"text body.toc-entry-7": "toc 7",
-	"text body.toc-entry-8": "toc 8",
-	"text body.toc-entry-9": "toc 9",
+	"quotations":        "quote",
+	"preformatted text": "html preformatted",
+}
+
+// classStyleNames does the same for the classes this exporter puts on its own
+// paragraphs, keyed by the class without its level.
+var classStyleNames = map[string]string{
+	"doc-title": "title",
+	"doc-meta":  "subtitle",
+	"toc-title": "toc heading",
+	"toc-entry": "toc",
+}
+
+// wordStyleName returns the Word built-in name a generated style stands for, or
+// "" when it stands for none.
+func wordStyleName(normalised string) string {
+	if word, ok := wordStyleNames[normalised]; ok {
+		return word
+	}
+	m := reClassSuffix.FindStringSubmatch(normalised)
+	if m == nil {
+		return ""
+	}
+	word, ok := classStyleNames[m[1]]
+	if !ok {
+		return ""
+	}
+	if m[2] != "" {
+		return word + " " + m[2]
+	}
+	return word
 }
 
 var (
@@ -117,7 +141,7 @@ func (s style) names() []string {
 	if n == "" {
 		return nil
 	}
-	if word, ok := wordStyleNames[n]; ok {
+	if word := wordStyleName(n); word != "" {
 		return []string{n, word}
 	}
 	return []string{n}

@@ -36,6 +36,29 @@ func TestStyleNamesIncludeTheWordEquivalent(t *testing.T) {
 	}
 }
 
+// LibreOffice builds these names from its own base style, whose name differs
+// between versions ("Body Text.toc-entry-2" in one, "Text Body.toc-entry-2" in
+// another). Only the class suffix belongs to this exporter.
+func TestWordStyleNameReadsTheClassSuffix(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"body text.toc-entry-2", "toc 2"},
+		{"text body.toc-entry-2", "toc 2"},
+		{"standard.toc-entry-9", "toc 9"},
+		{"body text.toc-title", "toc heading"},
+		{"text body.doc-title", "title"},
+		{"body text.doc-meta", "subtitle"},
+		{"quotations", "quote"},
+		{"preformatted text", "html preformatted"},
+		{"table heading", ""},
+		{"heading 1", ""},
+		{"body text.unknown-class", ""},
+	} {
+		if got := wordStyleName(tc.in); got != tc.want {
+			t.Errorf("wordStyleName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestEssenceKeepsMeaningAndDropsPresentation(t *testing.T) {
 	heading := style{
 		id: "TableHeading", kind: "paragraph", name: "Table Heading",

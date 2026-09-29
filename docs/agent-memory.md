@@ -48,7 +48,9 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   no OOXML written by hand for it.
 - **A CSS class becomes part of the style name**: `<p class="toc-entry-2">` yields a style named
   `Text Body.toc-entry-2`. That is the handle the DOCX step uses to find the table of contents again;
-  nothing else survives the HTML round trip well enough to mark a paragraph.
+  nothing else survives the HTML round trip well enough to mark a paragraph. **Match the suffix only** —
+  the part before the dot is LibreOffice's own base style, and it is `Text Body` in 7.4 but `Body Text`
+  in later versions. CI caught that; the container used for local checks did not.
 - `Template.Apply` keeps the *template* package as the base, so the generated `docProps` are only visible
   if their **package relationships and content types** are added too. A template carrying no properties of
   its own has neither, and the metadata silently disappears — including from the PDF.

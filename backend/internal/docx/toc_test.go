@@ -16,7 +16,7 @@ const contentsDocument = `<w:body>` +
 
 func contentsStyles() map[string]style {
 	return map[string]style{
-		"Entry1":           {id: "Entry1", kind: "paragraph", name: "Text Body.toc-entry-1"},
+		"Entry1":           {id: "Entry1", kind: "paragraph", name: "Body Text.toc-entry-1"},
 		"Entry2":           {id: "Entry2", kind: "paragraph", name: "Text Body.toc-entry-2"},
 		"TextBodytoctitle": {id: "TextBodytoctitle", kind: "paragraph", name: "Text Body.toc-title"},
 		"Heading1":         {id: "Heading1", kind: "paragraph", name: "Heading 1"},

@@ -18,7 +18,9 @@ import (
 
 const tocInstruction = ` TOC \o "1-9" \h \z \u `
 
-var reTOCEntryName = regexp.MustCompile(`^text body\.toc-entry-([1-9])$`)
+// Only the class suffix is this exporter's; the rest of the style name comes
+// from LibreOffice and changes between versions.
+var reTOCEntryName = regexp.MustCompile(`\.toc-entry-([1-9])$`)
 
 // tocEntryStyles returns the generated style ids that stand for a contents
 // entry. Which of the reader's styles they end up with is remapStyles' job:
