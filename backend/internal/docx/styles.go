@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -26,6 +27,35 @@ type style struct {
 
 // styleKey identifies a style by what it is called, within its kind.
 type styleKey struct{ kind, name string }
+
+// normaliseName is how two style names are compared. Word matches its own
+// style names "exactly [on] spelling and spacing, but not necessarily
+// capitalisation" — and the case does differ in practice: LibreOffice writes
+// `Heading 1` where Word writes `heading 1`.
+func normaliseName(name string) string {
+	return strings.Join(strings.Fields(strings.ToLower(name)), " ")
+}
+
+// wordStyleNames translates the names LibreOffice gives its own styles, and the
+// names that come from this exporter's CSS classes, into the Word built-in
+// names a company template is likely to define. Only concepts that really
+// correspond are listed: a template that defines none of them is no worse off.
+var wordStyleNames = map[string]string{
+	"quotations":            "quote",
+	"preformatted text":     "html preformatted",
+	"text body.doc-title":   "title",
+	"text body.doc-meta":    "subtitle",
+	"text body.toc-title":   "toc heading",
+	"text body.toc-entry-1": "toc 1",
+	"text body.toc-entry-2": "toc 2",
+	"text body.toc-entry-3": "toc 3",
+	"text body.toc-entry-4": "toc 4",
+	"text body.toc-entry-5": "toc 5",
+	"text body.toc-entry-6": "toc 6",
+	"text body.toc-entry-7": "toc 7",
+	"text body.toc-entry-8": "toc 8",
+	"text body.toc-entry-9": "toc 9",
+}
 
 var (
 	reStyleElement = regexp.MustCompile(`(?s)<w:style\s[^>]*>.*?</w:style>`)
@@ -63,7 +93,7 @@ func styleIDsByName(styles map[string]style) map[styleKey]string {
 		if s.name == "" {
 			continue
 		}
-		key := styleKey{s.kind, s.name}
+		key := styleKey{s.kind, normaliseName(s.name)}
 		// First definition wins, so a template that declares a name twice
 		// resolves the same way every time.
 		if _, exists := out[key]; !exists {
@@ -80,6 +110,19 @@ func (s style) hasFormatting() bool {
 	return m != nil && strings.TrimSpace(m[1]) != ""
 }
 
+// names lists what this style may be matched on: its own name first, then the
+// Word built-in the name stands for.
+func (s style) names() []string {
+	n := normaliseName(s.name)
+	if n == "" {
+		return nil
+	}
+	if word, ok := wordStyleNames[n]; ok {
+		return []string{n, word}
+	}
+	return []string{n}
+}
+
 // addStyles appends style definitions to a styles part.
 func addStyles(styles string, added []style) string {
 	if len(added) == 0 {
@@ -93,4 +136,70 @@ func addStyles(styles string, added []style) string {
 		return styles[:loc[0]] + b.String() + styles[loc[0]:]
 	}
 	return styles
+}
+
+// Properties worth keeping from a paragraph style the template has no name
+// for. They say what the text *is* — a table heading is bold, a quotation is
+// indented — as opposed to what it looks like, which is the template's call.
+var (
+	keptRunProps  = []string{"b", "bCs", "i", "iCs", "u", "strike", "dstrike", "caps", "smallCaps", "vertAlign"}
+	keptParaProps = []string{"jc", "ind", "keepNext", "keepLines", "outlineLvl"}
+)
+
+var reEmptyElement = regexp.MustCompile(`<w:(\w+)(?:\s[^>]*)?/>`)
+
+// essence returns the style stripped of everything that is presentation: the
+// fonts, sizes and colours that the template is there to decide. What is left
+// is based on the template's default style, so it inherits the company look
+// and only adds the emphasis the converter meant.
+//
+// It returns the empty string when nothing is left worth defining.
+func (s style) essence(basedOn string) string {
+	pPr := keepOnly(blockOf(s.xml, "w:pPr"), keptParaProps)
+	rPr := keepOnly(blockOf(s.xml, "w:rPr"), keptRunProps)
+	if pPr == "" && rPr == "" {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<w:style w:type="%s" w:styleId="%s">`, s.kind, s.id)
+	if s.name != "" {
+		fmt.Fprintf(&b, `<w:name w:val="%s"/>`, escapeAttr(s.name))
+	}
+	fmt.Fprintf(&b, `<w:basedOn w:val="%s"/>`, basedOn)
+	if pPr != "" {
+		b.WriteString(`<w:pPr>` + pPr + `</w:pPr>`)
+	}
+	if rPr != "" {
+		b.WriteString(`<w:rPr>` + rPr + `</w:rPr>`)
+	}
+	b.WriteString(`</w:style>`)
+	return b.String()
+}
+
+// blockOf returns the contents of the first <name>…</name> of xml.
+func blockOf(xml, name string) string {
+	element := firstElement(xml, name)
+	if element == "" {
+		return ""
+	}
+	return element[strings.Index(element, ">")+1 : len(element)-len("</"+name+">")]
+}
+
+// keepOnly filters a property block down to the listed empty elements, in the
+// order they appear — which is the order the schema requires.
+func keepOnly(block string, allowed []string) string {
+	if block == "" {
+		return ""
+	}
+	wanted := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		wanted[name] = true
+	}
+	var b strings.Builder
+	for _, m := range reEmptyElement.FindAllStringSubmatch(block, -1) {
+		if wanted[m[1]] {
+			b.WriteString(m[0])
+		}
+	}
+	return b.String()
 }

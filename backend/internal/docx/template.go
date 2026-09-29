@@ -27,6 +27,7 @@ import (
 // Part names of the OPC package this code manipulates.
 const (
 	partContentTypes = "[Content_Types].xml"
+	partPackageRels  = "_rels/.rels"
 	partDocument     = "word/document.xml"
 	partDocumentRels = "word/_rels/document.xml.rels"
 	partStyles       = "word/styles.xml"
@@ -42,6 +43,18 @@ const (
 	ctTemplateMain = "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml"
 	ctNumbering    = "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"
 )
+
+// The document properties, with what each needs to be visible to a reader: a
+// content type, and a relationship from the package. A document management
+// system reads these, and LibreOffice carries them into the PDF.
+var docPropsParts = []struct{ name, contentType, relType string }{
+	{"docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml",
+		"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"},
+	{"docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml",
+		"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties"},
+	{"docProps/custom.xml", "application/vnd.openxmlformats-officedocument.custom-properties+xml",
+		"http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties"},
+}
 
 var (
 	// ErrInvalidTemplate is returned when a file is not a usable Word template.
@@ -197,10 +210,16 @@ func (t *Template) Apply(generated []byte) ([]byte, error) {
 		}
 	}
 
+	generatedStyles := parseStyles(string(genParts[partStyles]))
+
+	// Contents: wrap the rendered entries in a real TOC field before the style
+	// references move, while they still carry the ids the converter gave them.
+	body = insertTOC(body, tocEntryStyles(generatedStyles))
+
 	// Styles: references are matched against the template by id, then by style
 	// name; a paragraph style it does not have falls back to its default, so
 	// text inherits the company fonts instead of the converter's.
-	body, borrowed := t.remapStyles(body, parseStyles(string(genParts[partStyles])))
+	body, borrowed := t.remapStyles(body, generatedStyles)
 	if len(borrowed) > 0 {
 		add(partStyles, []byte(addStyles(string(t.parts[partStyles]), borrowed)))
 	}
@@ -212,14 +231,22 @@ func (t *Template) Apply(generated []byte) ([]byte, error) {
 
 	add(partDocument, []byte(prologue+body+t.sectPr+"</w:body></w:document>"))
 	add(partDocumentRels, []byte(rels.marshal()))
-	// Keep the generated metadata: it carries the export title and date.
-	for _, name := range []string{"docProps/core.xml", "docProps/app.xml"} {
-		if content, ok := genParts[name]; ok {
-			if _, inTemplate := out[name]; inTemplate {
-				out[name] = content
-			}
+	// Metadata: the generated properties describe the export — title, author,
+	// source, classification — where the template's describe the template.
+	// They are of no use to a reader unless the package also points at them,
+	// which a template that carries none of its own does not.
+	packageRels := newRelSet(string(out[partPackageRels]))
+	for _, part := range docPropsParts {
+		content, ok := genParts[part.name]
+		if !ok {
+			continue
+		}
+		add(part.name, content)
+		if !packageRels.has(part.relType) {
+			packageRels.add(part.relType, part.name, "")
 		}
 	}
+	add(partPackageRels, []byte(packageRels.marshal()))
 	add(partContentTypes, []byte(t.contentTypes(out)))
 
 	return writeZip(out, order)
@@ -249,6 +276,11 @@ func (t *Template) contentTypes(parts map[string][]byte) string {
 	}
 	if _, ok := parts[partNumbering]; ok && !strings.Contains(ct, "/word/numbering.xml") {
 		fmt.Fprintf(&additions, `<Override PartName="/word/numbering.xml" ContentType="%s"/>`, ctNumbering)
+	}
+	for _, part := range docPropsParts {
+		if _, ok := parts[part.name]; ok && !strings.Contains(ct, "/"+part.name) {
+			fmt.Fprintf(&additions, `<Override PartName="/%s" ContentType="%s"/>`, part.name, part.contentType)
+		}
 	}
 	if additions.Len() > 0 {
 		ct = strings.Replace(ct, "</Types>", additions.String()+"</Types>", 1)
@@ -281,24 +313,44 @@ func (t *Template) remapStyles(body string, generated map[string]style) (string,
 		if t.styleIDs[id] {
 			return id, true
 		}
-		if g, ok := generated[id]; ok && g.name != "" {
-			if templateID, ok := t.styleIDsByName[styleKey{kind, g.name}]; ok {
-				return templateID, true
+		if g, ok := generated[id]; ok {
+			for _, name := range g.names() {
+				if templateID, ok := t.styleIDsByName[styleKey{kind, name}]; ok {
+					return templateID, true
+				}
 			}
 		}
 		return "", false
 	}
 
-	body = rePStyle.ReplaceAllStringFunc(body, func(m string) string {
-		id, ok := resolve("paragraph", attrValue(m))
-		if !ok {
-			id = t.defaultParagraphStyle
-		}
-		return `<w:pStyle w:val="` + id + `"/>`
-	})
-
 	var borrowed []style
 	carried := map[string]bool{}
+	carry := func(s style, xml string) {
+		if carried[s.id] {
+			return
+		}
+		carried[s.id] = true
+		borrowed = append(borrowed, style{id: s.id, kind: s.kind, name: s.name, xml: xml})
+	}
+
+	body = rePStyle.ReplaceAllStringFunc(body, func(m string) string {
+		original := attrValue(m)
+		if id, ok := resolve("paragraph", original); ok {
+			return `<w:pStyle w:val="` + id + `"/>`
+		}
+		// The template names no such style. Falling back to its default loses
+		// what the style stood for — a table heading is bold — so what the
+		// style says about the text, rather than about its look, is kept and
+		// based on the template's default.
+		if g, ok := generated[original]; ok {
+			if essence := g.essence(t.defaultParagraphStyle); essence != "" {
+				carry(g, essence)
+				return m
+			}
+		}
+		return `<w:pStyle w:val="` + t.defaultParagraphStyle + `"/>`
+	})
+
 	body = reRStyle.ReplaceAllStringFunc(body, func(m string) string {
 		id := attrValue(m)
 		if templateID, ok := resolve("character", id); ok {
@@ -312,10 +364,7 @@ func (t *Template) remapStyles(body string, generated map[string]style) (string,
 		if !ok || !g.hasFormatting() {
 			return ""
 		}
-		if !carried[id] {
-			carried[id] = true
-			borrowed = append(borrowed, g)
-		}
+		carry(g, g.xml)
 		return m
 	})
 
@@ -659,4 +708,24 @@ func writeZip(parts map[string][]byte, order []string) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// Polish applies the fixes that need no template, so that a document produced
+// without one is still put together properly. It is deliberately conservative:
+// a package it cannot make sense of comes back as it was.
+func Polish(generated []byte) ([]byte, error) {
+	parts, order, err := readZip(generated)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading generated document: %w", ErrApply, err)
+	}
+	doc, ok := parts[partDocument]
+	if !ok {
+		return generated, nil
+	}
+	polished := insertTOC(string(doc), tocEntryStyles(parseStyles(string(parts[partStyles]))))
+	if polished == string(doc) {
+		return generated, nil
+	}
+	parts[partDocument] = []byte(polished)
+	return writeZip(parts, order)
 }

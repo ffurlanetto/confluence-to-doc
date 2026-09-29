@@ -38,8 +38,20 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   `<w:rStyle w:val="StrongEmphasis"/>` with **no** `<w:b/>` on the run. Dropping an unknown character
   style therefore loses the formatting outright; the merge carries the definition over instead. (`<b>`
   and `<i>`, by contrast, do produce direct `<w:b/>`/`<w:i/>`.)
-- LibreOffice's `Del` style, for `<del>`, has an empty `<w:rPr>`: the strikethrough is lost on import.
-  `<s>` works and yields `<w:strike/>`.
+- LibreOffice's `Del`, `Ins` and `Q` styles have an **empty** `<w:rPr>`: `<del>`, `<ins>` and `<q>` lose
+  their marking on import, and `<mark>` is not mapped at all. The renderer rewrites the first three into
+  `<s>`, `<u>` and a background-coloured span, which do map. Measured, not assumed — see
+  [html-mapping.md](html-mapping.md) for the whole table.
+- **`<meta>` elements become document properties.** `author`, `description` and `keywords` land in
+  `docProps/core.xml`, `classification` becomes `dc:subject`, and *any other name* becomes a custom
+  property in `docProps/custom.xml`. That is the whole mechanism behind the export's metadata — there is
+  no OOXML written by hand for it.
+- **A CSS class becomes part of the style name**: `<p class="toc-entry-2">` yields a style named
+  `Text Body.toc-entry-2`. That is the handle the DOCX step uses to find the table of contents again;
+  nothing else survives the HTML round trip well enough to mark a paragraph.
+- `Template.Apply` keeps the *template* package as the base, so the generated `docProps` are only visible
+  if their **package relationships and content types** are added too. A template carrying no properties of
+  its own has neither, and the metadata silently disappears — including from the PDF.
 - LibreOffice's own DOCX has **no theme part at all** and never emits `w:themeColor`. A company theme can
   therefore only come from the template, and it does: part, relationship and content type all survive the
   merge, so styles referencing `accent1` or the hyperlink colour resolve.

@@ -99,7 +99,9 @@ const generatedDocument = `<?xml version="1.0" encoding="UTF-8" standalone="yes"
 // generatedStyles mirrors LibreOffice's styles part: its own style ids, each
 // declaring the Word style name it stands for.
 const generatedStyles = `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="48"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/><w:rPr><w:rFonts w:ascii="Liberation Sans"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/></w:style>
 <w:style w:type="character" w:styleId="StrongEmphasis"><w:name w:val="Strong"/><w:rPr><w:b/><w:bCs/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="InternetLink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="000080"/><w:u w:val="single"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="Del"><w:name w:val="del"/><w:rPr></w:rPr></w:style>
@@ -568,5 +570,49 @@ func TestApplyFitsTablesToTheTemplatePage(t *testing.T) {
 	}
 	if !strings.Contains(doc, "wide") {
 		t.Error("the table content was lost")
+	}
+}
+
+// The properties describe the export, not the template, and a reader only sees
+// them if the package points at them — which a template carrying none of its
+// own does not.
+func TestApplyCarriesTheDocumentProperties(t *testing.T) {
+	parts := templateParts()
+	delete(parts, "docProps/core.xml") // a template with no properties of its own
+
+	tpl, err := parseTemplate(buildZip(t, parts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := generatedParts()
+	generated["docProps/custom.xml"] = []byte(`<?xml version="1.0"?><Properties xmlns="x">` +
+		`<property name="Confluence page ID"><vt:lpwstr xmlns:vt="y">42</vt:lpwstr></property></Properties>`)
+
+	result, err := tpl.Apply(buildZip(t, generated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := readZip(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(out["docProps/core.xml"]), "Product documentation") {
+		t.Error("the export's own properties are missing from the result")
+	}
+	if !strings.Contains(string(out["docProps/custom.xml"]), "Confluence page ID") {
+		t.Error("the custom properties are missing from the result")
+	}
+	rels := string(out[partPackageRels])
+	for _, want := range []string{"docProps/core.xml", "docProps/custom.xml"} {
+		if !strings.Contains(rels, want) {
+			t.Errorf("the package does not point at %s, so a reader ignores it:\n%s", want, rels)
+		}
+	}
+	types := string(out[partContentTypes])
+	for _, want := range []string{"core-properties+xml", "custom-properties+xml"} {
+		if !strings.Contains(types, want) {
+			t.Errorf("%s has no content type:\n%s", want, types)
+		}
 	}
 }

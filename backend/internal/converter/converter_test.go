@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/exporter"
 )
 
 // sample keeps an accented word on purpose: it exercises UTF-8 round-tripping
@@ -354,5 +356,75 @@ func TestConvertKeepsInlineFormatting(t *testing.T) {
 	}
 	if !strings.Contains(styles, "<w:b/>") {
 		t.Errorf("no bold left anywhere in the styles:\n%s", styles)
+	}
+}
+
+// TestConvertProducesAStructuredDocument runs the renderer's own output through
+// the whole pipeline: the mappings it relies on are LibreOffice's, and only a
+// real conversion shows whether this version still honours them.
+func TestConvertProducesAStructuredDocument(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	html, err := exporter.RenderHTML(ctx, twoLevelTree(), exporter.RenderOptions{
+		Title: "Product documentation", GeneratedAt: time.Now(), UseTemplateStyles: true,
+		Author: "Jane Doe", Description: "Exported from Confluence", Classification: "Internal",
+		Keywords:   []string{"Confluence", "export"},
+		Properties: []exporter.Property{{Name: "Confluence page ID", Value: "1"}},
+	}, noAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, html, domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	// Page titles are headings, at the level of their depth in the tree.
+	for _, want := range []string{`<w:pStyle w:val="Heading1"/>`, `<w:pStyle w:val="Heading2"/>`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the page titles are not headings, %q is missing", want)
+		}
+	}
+	// The contents are a real field, with the entries written out.
+	if !strings.Contains(doc, `<w:docPartGallery w:val="Table of Contents"/>`) {
+		t.Errorf("the table of contents is not a field:\n%s", doc)
+	}
+	if !strings.Contains(doc, `w:anchor="page-2"`) {
+		t.Error("the contents entries do not link to the pages")
+	}
+	// The properties reached the package.
+	core := partOf(t, out.Bytes(), "docProps/core.xml")
+	for _, want := range []string{"Product documentation", "Jane Doe", "Internal"} {
+		if !strings.Contains(core, want) {
+			t.Errorf("document property %q is missing:\n%s", want, core)
+		}
+	}
+	if custom := partOf(t, out.Bytes(), "docProps/custom.xml"); !strings.Contains(custom, "Confluence page ID") {
+		t.Errorf("the custom properties are missing:\n%s", custom)
+	}
+}
+
+type noAssets struct{}
+
+func (noAssets) ResolveURL(raw string) (string, error) { return raw, nil }
+func (noAssets) FetchImage(context.Context, string) ([]byte, string, error) {
+	return nil, "", errors.New("no images in this test")
+}
+
+func twoLevelTree() *exporter.Node {
+	page := func(id, title, body string) confluence.Page {
+		return confluence.Page{
+			PageSummary: confluence.PageSummary{ID: id, Title: title}, BodyHTML: body,
+		}
+	}
+	return &exporter.Node{
+		Page: page("1", "Root page", "<p>Root body.</p>"), Number: "1",
+		Children: []*exporter.Node{{
+			Page: page("2", "Child page", "<p>Child body.</p>"), Depth: 1, Number: "1.1",
+		}},
 	}
 }

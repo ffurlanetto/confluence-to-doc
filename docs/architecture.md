@@ -90,7 +90,20 @@ Queue robustness:
   block that no longer fits moves to the next page whole instead of being cut in two. It is written as an
   inline style on purpose: LibreOffice turns a stylesheet rule into a paragraph style, which the Word
   template merge would discard;
+- a few elements LibreOffice does not map at all (`<del>`, `<ins>`, `<mark>`, task-list checkboxes) are
+  rewritten into markup it does, so the marking they carry is not silently lost;
+- document properties — title, author, description, keywords, classification and the Confluence source —
+  are written as `<meta>` elements, which the converter turns into `docProps`;
 - sanitisation: scripts, iframes, forms and event handlers are removed.
+
+Both formats come out of the **same** DOCX: the HTML is converted to DOCX, the template (when configured)
+is applied, and a PDF is produced from that document rather than from the HTML. Word and PDF are then one
+layout rather than two independent renderings of the same source.
+
+The table of contents is written as paragraphs whose class carries the level; the DOCX step recognises
+them, applies the reader's *TOC 1…9* styles and wraps them in a real Word `TOC` field.
+
+Every element's fate is recorded in [html-mapping.md](html-mapping.md).
 
 ### Company Word template
 

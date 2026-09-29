@@ -46,7 +46,9 @@ Author it in Word like any normal document, then save as `.dotx` (or `.docx`):
    hyperlink colour all apply to the export.
 5. **Character styles** — define **Hyperlink** (and, if you care, **Strong** and **Emphasis**). Links take
    the template's `Hyperlink` style, which is usually where a colour palette shows most.
-6. **Leave the body empty** (or with a placeholder): the template's own body content is discarded.
+6. **Contents styles** — define **TOC 1** to **TOC 9** (and **TOC Heading**) if you want the table of
+   contents to follow the company look. The export produces a real Word contents field.
+7. **Leave the body empty** (or with a placeholder): the template's own body content is discarded.
 
 A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`–`Heading 6` styles
 (with outline levels) ✅, theme colours ✅, `Hyperlink` style ✅.
@@ -59,15 +61,24 @@ A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`
 - **The colour and font theme applies.** The theme part, the relationship to it and its content type are
   all carried over, so styles that reference `accent1`, `text2`, the hyperlink colour or the major/minor
   theme fonts resolve against the company palette.
-- **Style references are matched by name, then by id.** LibreOffice and Word give the same style different
-  ids — a link is `InternetLink` in one and `Hyperlink` in the other — while both record the same style
-  *name*, which Word does not translate. Matching on the name is what lets a link take the company link
-  colour, and what makes a template authored in French or German work.
+- **Style references are matched by name, then by id, ignoring capitalisation.** LibreOffice and Word give
+  the same style different ids — a link is `InternetLink` in one and `Hyperlink` in the other, and a
+  French Word writes `Titre1` for what it names `heading 1` — while both record the same style *name*,
+  which Word does not translate. Word itself matches style names "on spelling and spacing, but not
+  necessarily capitalisation", and so does this: LibreOffice writes `Heading 1` where Word writes
+  `heading 1`. This is what lets a template authored in another language be honoured at all.
 - Any paragraph style the template does **not** name (the converter invents `TableContents`,
   `Quotations`…) is remapped to the template's default paragraph style. This is what makes the company
   font win; it also means a style you did not define cannot be honoured.
 - A **character** style the template does not name is carried over with its definition instead — losing it
   would silently drop the bold of `<strong>`, the italics of `<em>` or the monospace of `<code>`.
+- A **paragraph** style the template does not name keeps what it says about the text — a table heading is
+  bold and centred, a quotation is indented — based on the template's default style, and loses what it
+  says about the look. The company font and colours still win.
+- The **table of contents** is a real Word field using the template's `TOC 1…9` styles. Word refreshes it
+  on open, which is what fills in the page numbers.
+- **Document properties** (title, author, description, keywords, classification, and custom properties
+  naming the Confluence source) travel with the document into both the DOCX and the PDF.
 - Tables keep their visible borders from the export, not from a table style.
 - **Tables are scaled to the template's printable width.** The converter lays them out on its own page,
   which is wider than most company templates; a table that would not fit the template's margins has its
@@ -126,6 +137,8 @@ re-validated.
 | The header is missing                           | It was defined in Word as a *first page* header only, and the export's first page uses the default header. Define the default header too. |
 | Titles do not use the company style             | The style is a custom one, not based on Word's built-in `Heading 1…6`. Styles are matched by their built-in name, so a look-alike style created from scratch cannot be found. |
 | Links are not in the company colour             | The template defines no character style named `Hyperlink`. Add one (Word's built-in **Hyperlink** style), and give it a theme colour if you want it to follow the palette. |
+| The contents do not look like the company's     | The template defines no `TOC 1`…`TOC 9` styles. Insert a table of contents once in the template and style it; Word creates them. |
+| The contents show no page numbers               | Word fills them when it refreshes the field, which it does on open. A PDF never refreshes a field, so it has clickable entries and a bookmark tree instead. |
 | Body text keeps a generic font                  | The font was applied to text directly in the template instead of to the `Normal` style. |
 | Lists lose their bullets                        | The export brings its own list definitions; check the template's numbering is not corrupted by a Word add-in. |
 | The PDF has no bookmarks                        | The template's heading styles carry no outline level. Base them on Word's built-in `Heading 1…6`. |
