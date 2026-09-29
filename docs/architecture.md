@@ -95,8 +95,10 @@ Queue robustness:
 ### Company Word template
 
 When `WORD_TEMPLATE_PATH` is set, the document is produced inside the corporate template
-(`internal/docx`): the template package is the base of the result, and only the generated body is injected
-into it, with images, hyperlinks, list numbering and style references remapped to stay valid.
+(`internal/docx`): the template package is the base of the result — including its colour and font theme —
+and only the generated body is injected into it, with images, hyperlinks, list numbering and style
+references remapped to stay valid. Style references are resolved against the template by id and then by
+style **name**, because LibreOffice and Word give the same style different ids.
 
 Two consequences shape the pipeline:
 

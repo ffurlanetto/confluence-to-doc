@@ -59,6 +59,7 @@ type Template struct {
 	order []string
 
 	styleIDs              map[string]bool
+	styleIDsByName        map[styleKey]string
 	defaultParagraphStyle string
 	sectPr                string
 	// textWidth is the printable width of the template's page, in twips; 0 when
@@ -107,6 +108,7 @@ func parseTemplate(data []byte) (*Template, error) {
 		sectPr:                sectPr,
 		textWidth:             textWidthOf(sectPr),
 		styleIDs:              styleIDsOf(styles),
+		styleIDsByName:        styleIDsByName(parseStyles(styles)),
 		defaultParagraphStyle: defaultParagraphStyleOf(styles),
 	}
 	if numbering, ok := parts[partNumbering]; ok {
@@ -195,10 +197,13 @@ func (t *Template) Apply(generated []byte) ([]byte, error) {
 		}
 	}
 
-	// Styles: anything the template does not define falls back to its default
-	// paragraph style, so text inherits the company fonts instead of the
-	// converter's.
-	body = t.remapStyles(body)
+	// Styles: references are matched against the template by id, then by style
+	// name; a paragraph style it does not have falls back to its default, so
+	// text inherits the company fonts instead of the converter's.
+	body, borrowed := t.remapStyles(body, parseStyles(string(genParts[partStyles])))
+	if len(borrowed) > 0 {
+		add(partStyles, []byte(addStyles(string(t.parts[partStyles]), borrowed)))
+	}
 
 	// Tables: LibreOffice sized them for its own, wider page. The template's
 	// page replaces it just below, so anything too wide is scaled down now
@@ -264,28 +269,65 @@ var mediaTypes = map[string]string{
 }
 
 // remapStyles rewrites references to styles the template does not define.
-func (t *Template) remapStyles(body string) string {
-	body = rePStyle.ReplaceAllStringFunc(body, func(m string) string {
-		id := attrValue(m)
+// remapStyles rewrites the generated document's style references so they point
+// at the template. It returns the rewritten body and the character styles that
+// have to be carried over from the generated document because the template has
+// no equivalent.
+func (t *Template) remapStyles(body string, generated map[string]style) (string, []style) {
+	// resolve answers: which style of the template does this reference mean?
+	// The id first — the converter and Word agree on `Heading1` — then the
+	// style name, which is where `InternetLink` meets `Hyperlink`.
+	resolve := func(kind, id string) (string, bool) {
 		if t.styleIDs[id] {
-			return m
+			return id, true
 		}
-		return `<w:pStyle w:val="` + t.defaultParagraphStyle + `"/>`
+		if g, ok := generated[id]; ok && g.name != "" {
+			if templateID, ok := t.styleIDsByName[styleKey{kind, g.name}]; ok {
+				return templateID, true
+			}
+		}
+		return "", false
+	}
+
+	body = rePStyle.ReplaceAllStringFunc(body, func(m string) string {
+		id, ok := resolve("paragraph", attrValue(m))
+		if !ok {
+			id = t.defaultParagraphStyle
+		}
+		return `<w:pStyle w:val="` + id + `"/>`
 	})
-	// Character and table styles have no safe default: dropping the reference
-	// keeps direct formatting (bold, borders) and inherits the rest.
+
+	var borrowed []style
+	carried := map[string]bool{}
 	body = reRStyle.ReplaceAllStringFunc(body, func(m string) string {
-		if t.styleIDs[attrValue(m)] {
-			return m
+		id := attrValue(m)
+		if templateID, ok := resolve("character", id); ok {
+			return `<w:rStyle w:val="` + templateID + `"/>`
+		}
+		// No equivalent in the template. Dropping the reference would lose
+		// what it stands for — the bold of <strong>, the monospace of <code> —
+		// so the converter's own definition comes along instead. Its id cannot
+		// clash: the template does not define it.
+		g, ok := generated[id]
+		if !ok || !g.hasFormatting() {
+			return ""
+		}
+		if !carried[id] {
+			carried[id] = true
+			borrowed = append(borrowed, g)
+		}
+		return m
+	})
+
+	// Table styles have no safe default: dropping the reference keeps the
+	// direct formatting (borders, shading) and inherits the rest.
+	body = reTblStyle.ReplaceAllStringFunc(body, func(m string) string {
+		if id, ok := resolve("table", attrValue(m)); ok {
+			return `<w:tblStyle w:val="` + id + `"/>`
 		}
 		return ""
 	})
-	return reTblStyle.ReplaceAllStringFunc(body, func(m string) string {
-		if t.styleIDs[attrValue(m)] {
-			return m
-		}
-		return ""
-	})
+	return body, borrowed
 }
 
 // mergeNumbering appends the generated list definitions to the template's,

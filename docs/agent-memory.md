@@ -29,8 +29,20 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   configured — otherwise the company font would never win.
 - Each conversion gets a throw-away LibreOffice profile (`-env:UserInstallation=…`); without it parallel
   conversions collide over a shared profile.
-- LibreOffice invents style names (`BodyText`, `TableContents`, `PreformattedText`, `BodyTextdoc-title`).
-  Only `Heading1…6` overlaps with what a Word template defines — everything else is remapped.
+- LibreOffice invents style **ids** (`BodyText`, `TableContents`, `PreformattedText`, `InternetLink`,
+  `StrongEmphasis`, `Emphasis`, `SourceText`, `Del`) but records the **Word style name** inside each of
+  them: `InternetLink` declares `<w:name w:val="Hyperlink"/>`, `StrongEmphasis` declares `Strong`. The
+  name is the interoperable key — Word does not translate it, so it also matches a template authored in
+  another language. `docx.remapStyles` resolves by id first, then by name.
+- Inline markup goes through those character styles rather than direct formatting: `<strong>` becomes
+  `<w:rStyle w:val="StrongEmphasis"/>` with **no** `<w:b/>` on the run. Dropping an unknown character
+  style therefore loses the formatting outright; the merge carries the definition over instead. (`<b>`
+  and `<i>`, by contrast, do produce direct `<w:b/>`/`<w:i/>`.)
+- LibreOffice's `Del` style, for `<del>`, has an empty `<w:rPr>`: the strikethrough is lost on import.
+  `<s>` works and yields `<w:strike/>`.
+- LibreOffice's own DOCX has **no theme part at all** and never emits `w:themeColor`. A company theme can
+  therefore only come from the template, and it does: part, relationship and content type all survive the
+  merge, so styles referencing `accent1` or the hyperlink colour resolve.
 - **Tables are sized for LibreOffice's own page.** Its HTML import uses A4 with 1134/567 twip margins, so
   it fits every table into 10205 twips and writes the result as absolute `dxa` widths with
   `<w:tblLayout w:type="fixed"/>`. A company template with 2.5 cm margins leaves only 9070 — which is why

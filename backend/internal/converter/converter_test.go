@@ -127,6 +127,8 @@ func minimalTemplate(t *testing.T) *docx.Template {
 			`<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>` +
 			`<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>` +
 			`<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>` +
+			// Word calls it Hyperlink, LibreOffice InternetLink; only the name matches.
+			`<w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="C00000" w:themeColor="accent1"/><w:u w:val="single"/></w:rPr></w:style>` +
 			`</w:styles>`,
 		"word/header1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr ` + ns + `>` +
 			`<w:p><w:r><w:t>ACME CORPORATION — INTERNAL</w:t></w:r></w:p></w:hdr>`,
@@ -244,12 +246,17 @@ func wideSample() []byte {
 
 func documentXML(t *testing.T, docxBytes []byte) string {
 	t.Helper()
+	return partOf(t, docxBytes, "word/document.xml")
+}
+
+func partOf(t *testing.T, docxBytes []byte, name string) string {
+	t.Helper()
 	zr, err := zip.NewReader(bytes.NewReader(docxBytes), int64(len(docxBytes)))
 	if err != nil {
 		t.Fatalf("result is not a DOCX package: %v", err)
 	}
 	for _, f := range zr.File {
-		if f.Name != "word/document.xml" {
+		if f.Name != name {
 			continue
 		}
 		rc, err := f.Open()
@@ -263,7 +270,7 @@ func documentXML(t *testing.T, docxBytes []byte) string {
 		}
 		return string(content)
 	}
-	t.Fatal("word/document.xml missing")
+	t.Fatalf("%s missing", name)
 	return ""
 }
 
@@ -304,5 +311,48 @@ func TestConvertFitsTablesToTheTemplatePage(t *testing.T) {
 	// template replaced the converter's styles with its own.
 	if !strings.Contains(doc, "<w:keepLines/>") {
 		t.Error("paragraphs are not kept whole: no w:keepLines in the templated document")
+	}
+}
+
+// TestConvertKeepsInlineFormatting covers what happens between LibreOffice's
+// style ids and Word's: a link has to pick up the company's link style, and
+// bold has to survive even though the template names no style for it.
+func TestConvertKeepsInlineFormatting(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>` +
+		`<p>A <strong>bold</strong> word, an <em>emphasised</em> one, and a ` +
+		`<a href="https://confluence.example.com/x/1">link</a>.</p></body></html>`
+
+	var out bytes.Buffer
+	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, []byte(html), domain.FormatDOCX, &out); err != nil {
+		t.Fatal(err)
+	}
+	doc := documentXML(t, out.Bytes())
+
+	if !strings.Contains(doc, `<w:rStyle w:val="Hyperlink"/>`) {
+		t.Errorf("the link does not use the company Hyperlink style:\n%s", doc)
+	}
+	if strings.Contains(doc, "InternetLink") {
+		t.Error("the converter's own style id leaked into the result")
+	}
+
+	// Bold and italics come from character styles the template does not name;
+	// their definitions must have come along, or the words lose their look.
+	styles := partOf(t, out.Bytes(), "word/styles.xml")
+	for _, want := range []string{"bold", "emphasised"} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("%q is missing from the document", want)
+		}
+	}
+	for _, m := range regexp.MustCompile(`<w:rStyle w:val="([^"]+)"/>`).FindAllStringSubmatch(doc, -1) {
+		if !strings.Contains(styles, `w:styleId="`+m[1]+`"`) {
+			t.Errorf("run style %q is referenced but not defined", m[1])
+		}
+	}
+	if !strings.Contains(styles, "<w:b/>") {
+		t.Errorf("no bold left anywhere in the styles:\n%s", styles)
 	}
 }
