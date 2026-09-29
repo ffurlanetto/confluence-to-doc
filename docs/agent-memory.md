@@ -71,6 +71,12 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
 - A **bullet inside a table cell** carries `<w:ind w:left="709"/>` whatever the column is worth. In a
   squeezed cell that leaves a couple of characters per line, which looks far worse than the column width
   alone suggests. `capIndents` bounds it to a quarter of the cell.
+- Beyond a certain width no redistribution helps, and the answer is a **landscape section**: an empty
+  paragraph whose `w:pPr` carries the *outgoing* section's properties closes a section, so
+  portrait-break, table, landscape-break puts one table sideways and returns to portrait. Inside
+  `w:pPr` the schema puts `w:sectPr` **last**, after `w:rPr` — the other order is rejected. The landscape
+  page is derived from the template's own `w:pgSz` (swap `w:w`/`w:h`, add `w:orient="landscape"`), so it
+  works for any template and keeps the header references.
 - **CSS widths on tables are ignored**, both `table { width: … }` and `<col style="width: …">`. LibreOffice
   sizes columns from their content. The HTML *attribute* `width="100%"` is honoured, and is the only way
   to get a relative `<w:tblW w:type="pct"/>` out of the import.

@@ -456,7 +456,8 @@ func TestConvertFitsAWideConfluenceTable(t *testing.T) {
 	}
 	doc := documentXML(t, out.Bytes())
 
-	const printable = 11906 - 1134 - 1134
+	// A4 turned sideways, less the template's margins.
+	const printable = 16838 - 1134 - 1134
 	columns := regexp.MustCompile(`<w:gridCol w:w="(\d+)"/>`).FindAllStringSubmatch(doc, -1)
 	if len(columns) != 9 {
 		t.Fatalf("got %d columns, want 9", len(columns))
@@ -479,6 +480,15 @@ func TestConvertFitsAWideConfluenceTable(t *testing.T) {
 	if narrowest < 700 {
 		t.Errorf("the narrowest column is %d twips, too narrow to read", narrowest)
 	}
+	// Nine columns do not belong on a portrait page: the table gets a
+	// landscape section of its own, and the document returns to portrait.
+	if !strings.Contains(doc, `w:orient="landscape"`) {
+		t.Errorf("the table was left on a portrait page:\n%s", doc)
+	}
+	if n := strings.Count(doc, "<w:sectPr>"); n != 3 {
+		t.Errorf("got %d sections, want portrait/landscape/portrait", n)
+	}
+
 	// A bullet in a narrow cell must not be indented past its own text.
 	for _, m := range regexp.MustCompile(`<w:ind w:left="(\d+)"`).FindAllStringSubmatch(doc, -1) {
 		left, err := strconv.Atoi(m[1])

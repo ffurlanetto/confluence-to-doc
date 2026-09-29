@@ -224,10 +224,11 @@ func (t *Template) Apply(generated []byte) ([]byte, error) {
 		add(partStyles, []byte(addStyles(string(t.parts[partStyles]), borrowed)))
 	}
 
-	// Tables: LibreOffice sized them for its own, wider page. The template's
-	// page replaces it just below, so anything too wide is scaled down now
-	// rather than clipped by the reader.
-	body = fitTables(body, t.textWidth)
+	// Tables: LibreOffice sizes them from their content and overflows even its
+	// own page, and the template's page — which replaces it just below — is
+	// usually narrower still. Each table is laid out again to fit, sideways
+	// when portrait cannot hold it.
+	body = layOutTables(body, t.sectPr)
 
 	add(partDocument, []byte(prologue+body+t.sectPr+"</w:body></w:document>"))
 	add(partDocumentRels, []byte(rels.marshal()))
@@ -726,7 +727,7 @@ func Polish(generated []byte) ([]byte, error) {
 	// The converter overflows its own page for a table with many columns, so
 	// the widths need bringing back even when no template narrows the page.
 	if sectPr, err := extractSectPr(string(doc)); err == nil {
-		polished = fitTables(polished, textWidthOf(sectPr))
+		polished = layOutTables(polished, sectPr)
 	}
 	if polished == string(doc) {
 		return generated, nil
