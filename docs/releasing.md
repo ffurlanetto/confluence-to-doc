@@ -66,6 +66,30 @@ an image pull secret.
 The Helm chart's default image repository already points at `ghcr.io/ffurlanetto/confluence-to-doc`, so
 once `v0.1.0` is published a default install pulls the matching tag.
 
+## Running a release with Docker Compose
+
+[`docker-compose.release.yml`](../docker-compose.release.yml) runs the published image with a PostgreSQL
+next to it and builds nothing. It has no mocks: fill in a real OIDC provider, a real Confluence and an
+encryption key in `.env` (see `.env.example`) — compose refuses to start until they are set, naming the
+one that is missing.
+
+```bash
+docker login ghcr.io          # only while the package is private
+make up-release               # docker compose -f docker-compose.release.yml up -d
+```
+
+The tag defaults to `latest` and the app service is `pull_policy: always`, so `up` picks up a new release
+without further ceremony. Pin it for anything that matters:
+
+```bash
+C2D_VERSION=1.2.3 docker compose -f docker-compose.release.yml up -d
+```
+
+`C2D_VERSION=edge` runs the current `main`. The other variables the file reads are `HTTP_PORT` (default
+`8080`) and `POSTGRES_PASSWORD`; everything else in `.env` is passed straight to the container, so
+`S3_BUCKET`, `WORD_TEMPLATE_PATH` and the `OTEL_*` variables work as documented in
+[configuration.md](configuration.md).
+
 ## Deploying a release
 
 ```bash
