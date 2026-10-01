@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Lint
         run: helm lint charts/confluence-to-doc -f charts/confluence-to-doc/values-production.yaml
       - name: Render and validate against the Kubernetes schemas
