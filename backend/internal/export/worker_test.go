@@ -17,6 +17,7 @@ import (
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence/fake"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
@@ -206,8 +207,18 @@ func TestJanitorExpiresDocuments(t *testing.T) {
 	_, _ = e.blobs.Put(ctx, key, strings.NewReader("pdf"))
 	_ = e.store.CompleteExport(ctx, claimed.ID, "w", key, 3, 1, -time.Second)
 
-	if n := export.NewJanitor(e.store, e.blobs, time.Hour).RunOnce(ctx); n != 1 {
+	old := domain.AuditEvent{ID: uuid.Must(uuid.NewV7()), OccurredAt: time.Now().Add(-48 * time.Hour),
+		Action: "auth.login", Outcome: domain.AuditSuccess}
+	if err := e.store.InsertAuditEvent(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	janitor := export.NewJanitor(e.store, e.blobs, time.Hour).WithAudit(audit.New(e.store, nil), e.store, 24*time.Hour)
+	if n := janitor.RunOnce(ctx); n != 1 {
 		t.Fatalf("expired %d exports, want 1", n)
+	}
+	events, _ := e.store.ListAuditEvents(ctx, domain.AuditFilter{})
+	if len(events) != 1 || events[0].Action != audit.ActionExportExpire || events[0].TargetID != job.ID.String() {
+		t.Errorf("want only the expiry event (old one purged), got %+v", events)
 	}
 	if _, err := e.blobs.Open(ctx, key); err == nil {
 		t.Error("file must be deleted after retention")

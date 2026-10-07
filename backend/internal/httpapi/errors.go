@@ -71,3 +71,16 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusInternalServerError, "internal", "Internal error.")
 	}
 }
+
+// errorReason is a short, stable label for an error, safe to record in the
+// audit trail (no upstream message, which could echo user input).
+func errorReason(err error) string {
+	switch {
+	case errors.Is(err, account.ErrInvalidPAT), errors.Is(err, confluence.ErrUnauthorized):
+		return "pat_invalid"
+	case errors.Is(err, confluence.ErrForbidden):
+		return "confluence_forbidden"
+	default:
+		return "error"
+	}
+}

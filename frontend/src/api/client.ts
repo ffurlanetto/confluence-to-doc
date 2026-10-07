@@ -1,4 +1,13 @@
-import type { CreateExportRequest, Export, ExportFormat, Me, PageSummary, Preferences } from './types';
+import type {
+  AuditFilter,
+  AuditPage,
+  CreateExportRequest,
+  Export,
+  ExportFormat,
+  Me,
+  PageSummary,
+  Preferences,
+} from './types';
 
 /** Error returned by the API, carrying the stable machine-readable code. */
 export class ApiError extends Error {
@@ -64,6 +73,15 @@ export const api = {
   createExport: (req: CreateExportRequest) => request<Export>('POST', '/api/exports', req),
   deleteExport: (id: string) => request<undefined>('DELETE', `/api/exports/${encodeURIComponent(id)}`),
   downloadUrl: (id: string) => `/api/exports/${encodeURIComponent(id)}/download`,
+
+  auditEvents: (filter: AuditFilter, before?: string) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries({ ...filter, before })) {
+      if (value) params.set(key, value);
+    }
+    const query = params.toString();
+    return request<AuditPage>('GET', `/api/admin/audit${query ? `?${query}` : ''}`);
+  },
 
   logout: () => request<{ logoutUrl?: string }>('POST', '/auth/logout'),
 };

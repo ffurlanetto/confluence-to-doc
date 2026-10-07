@@ -8,6 +8,8 @@ export interface Me {
   id: string;
   email: string;
   name: string;
+  /** Granted by the identity provider's groups (OIDC_ADMIN_GROUPS). */
+  isAdmin: boolean;
 }
 
 export interface Preferences {
@@ -51,4 +53,35 @@ export interface CreateExportRequest {
   pageId: string;
   format: ExportFormat;
   includeChildren: boolean;
+}
+
+export type AuditOutcome = 'success' | 'failure' | 'denied';
+
+export interface AuditEvent {
+  id: string;
+  occurredAt: string;
+  actorId?: string;
+  actorEmail?: string;
+  action: string;
+  outcome: AuditOutcome;
+  targetType?: string;
+  targetId?: string;
+  clientIp?: string;
+  userAgent?: string;
+  requestId?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AuditPage {
+  events: AuditEvent[];
+  /** Present when older events remain: pass it as `before` to get them. */
+  nextCursor?: string;
+}
+
+export interface AuditFilter {
+  actor?: string;
+  action?: string;
+  /** RFC 3339 timestamps. */
+  from?: string;
+  to?: string;
 }

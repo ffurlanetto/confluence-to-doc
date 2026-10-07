@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
@@ -46,6 +47,13 @@ type WorkerConfig struct {
 	// ShutdownGrace is how long in-flight jobs may run after shutdown starts
 	// before being released back to the queue.
 	ShutdownGrace time.Duration
+	// Audit records the outcome of each export; nil records nothing.
+	Audit Auditor
+}
+
+// Auditor records security events (implemented by audit.Recorder).
+type Auditor interface {
+	Record(ctx context.Context, e domain.AuditEvent)
 }
 
 // Pool runs a bounded number of workers that consume the export queue.
@@ -68,6 +76,9 @@ func NewPool(repo Repo, clients ClientProvider, conv converter.Converter, blobs 
 	}
 	if cfg.ShutdownGrace <= 0 {
 		cfg.ShutdownGrace = 30 * time.Second
+	}
+	if cfg.Audit == nil {
+		cfg.Audit = audit.Discard{}
 	}
 	host, _ := os.Hostname()
 	return &Pool{
@@ -228,6 +239,8 @@ func (p *Pool) process(poolCtx context.Context, workerID string, job *domain.Exp
 	observability.ExportDuration.Record(finishCtx, p.now().Sub(start).Seconds(), formatAttr)
 	observability.ExportPages.Record(finishCtx, int64(pages), formatAttr)
 	span.SetAttributes(attribute.Int("c2d.export.pages", pages), attribute.Int64("c2d.export.bytes", size))
+	p.cfg.Audit.Record(finishCtx, exportEvent(job, audit.ActionExportComplete, domain.AuditSuccess,
+		map[string]any{"pages": pages, "size": size}))
 	log.Info("export succeeded", "pages", pages, "bytes", size, "duration", p.now().Sub(start).String())
 }
 
@@ -241,9 +254,25 @@ func (p *Pool) finish(ctx context.Context, log *slog.Logger, job *domain.Export,
 		observability.AttrFormat.String(string(job.Format)),
 		observability.AttrOutcome.String(outcome)))
 	log.WarnContext(ctx, "export attempt failed", "err", cause, "outcome", outcome)
+	if outcome == "failed" {
+		p.cfg.Audit.Record(ctx, exportEvent(job, audit.ActionExportFail, domain.AuditFailure,
+			map[string]any{"reason": UserMessage(cause), "attempts": job.Attempts}))
+	}
 	if err := p.repo.FailExport(ctx, job.ID, workerID, UserMessage(cause), retry, delay, p.cfg.Retention); err != nil &&
 		!errors.Is(err, store.ErrLeaseLost) {
 		log.Error("recording export failure", "err", err)
+	}
+}
+
+// exportEvent is an audit event about a job, attributed to its owner: the
+// worker acts on their behalf, with their token.
+func exportEvent(job *domain.Export, action string, outcome domain.AuditOutcome, details map[string]any) domain.AuditEvent {
+	owner := job.UserID
+	details["pageId"] = job.RootPageID
+	details["format"] = string(job.Format)
+	return domain.AuditEvent{
+		ActorID: &owner, Action: action, Outcome: outcome,
+		TargetType: audit.TargetExport, TargetID: job.ID.String(), Details: details,
 	}
 }
 

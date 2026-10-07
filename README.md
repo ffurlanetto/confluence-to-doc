@@ -12,6 +12,7 @@ preserving the hierarchy**, as **Word (.docx)** or **PDF**.
 - 🏢 Documents can be produced in the **company format** from a Word template: header, footer, fonts and
   page layout (see [docs/word-template.md](docs/word-template.md))
 - 🪣 Documents are stored on **local disk** or **S3 / S3-compatible** object storage
+- 🛡️ **Audit trail** of sign-ins, exports and downloads, for administrators and the SIEM
 - 📈 **OpenTelemetry** traces and metrics over OTLP, with trace ids in the logs
 - 🌳 The hierarchy is preserved: numbered titles (`1`, `1.1`, `1.1.1`…), real Word/PDF heading levels,
   a table of contents, rewritten internal links and embedded images
@@ -109,6 +110,7 @@ Details in [docs/architecture.md](docs/architecture.md); decisions in [docs/adr/
 | [docs/word-template.md](docs/word-template.md)       | Preparing and troubleshooting the company Word template    |
 | [docs/html-mapping.md](docs/html-mapping.md)         | What each HTML element becomes in the Word and PDF output  |
 | [docs/agent-memory.md](docs/agent-memory.md)         | Durable project memory for AI agents and new contributors  |
+| [docs/enterprise-hardening.md](docs/enterprise-hardening.md) | Enterprise hardening plan: decisions and lots      |
 | [docs/releasing.md](docs/releasing.md)               | Publishing the container image, tags, running a release    |
 | [charts/confluence-to-doc/](charts/confluence-to-doc/) | Helm chart: values, storage choices, operational notes   |
 | [docs/adr/](docs/adr/)                               | Architecture decision records                              |

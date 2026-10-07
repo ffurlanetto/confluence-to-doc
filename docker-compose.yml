@@ -33,6 +33,7 @@ services:
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://localhost:8091}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-confluence-to-doc}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-dev-secret}
+      OIDC_ADMIN_GROUPS: ${OIDC_ADMIN_GROUPS:-c2d-admins}
       CONFLUENCE_BASE_URL: ${CONFLUENCE_BASE_URL:-http://localhost:8090}
       # Development-only key. Generate your own with: openssl rand -base64 32
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-ZGV2LW9ubHktZGV2LW9ubHktZGV2LW9ubHktZGV2LTA=}

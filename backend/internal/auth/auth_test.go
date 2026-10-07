@@ -66,6 +66,39 @@ func (m *memRepo) SessionUser(_ context.Context, h []byte) (*domain.User, *domai
 	return nil, nil, domain.ErrNotFound
 }
 
+func (m *memRepo) RecordLogin(_ context.Context, id uuid.UUID, isAdmin bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, u := range m.users {
+		if u.ID == id {
+			u.IsAdmin = isAdmin
+		}
+	}
+	return nil
+}
+
+// events collects audit events.
+type events struct {
+	mu   sync.Mutex
+	list []domain.AuditEvent
+}
+
+func (e *events) Record(_ context.Context, ev domain.AuditEvent) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.list = append(e.list, ev)
+}
+
+func (e *events) actions() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []string
+	for _, ev := range e.list {
+		out = append(out, ev.Action+":"+string(ev.Outcome))
+	}
+	return out
+}
+
 func (m *memRepo) DeleteSession(_ context.Context, h []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -77,9 +110,13 @@ type harness struct {
 	app    *httptest.Server
 	client *http.Client
 	repo   *memRepo
+	events *events
 }
 
-func newHarness(t *testing.T) *harness {
+// option tweaks the provider or the authenticator configuration.
+type option func(*oidcmock.Provider, *auth.Config)
+
+func newHarness(t *testing.T, opts ...option) *harness {
 	t.Helper()
 	idp := oidcmock.New("app", "s3cret", oidcmock.User{Subject: "u-1", Email: "alice@example.com", Name: "Alice"})
 	idpSrv := httptest.NewServer(idp)
@@ -94,9 +131,15 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(app.Close)
 	pub, _ := url.Parse(app.URL)
 
-	a, err := auth.New(context.Background(), auth.Config{
+	cfg := auth.Config{
 		IssuerURL: idpSrv.URL, ClientID: "app", ClientSecret: "s3cret", PublicURL: pub, SessionTTL: time.Hour,
-	}, repo, sealer)
+		GroupsClaim: "groups",
+	}
+	for _, o := range opts {
+		o(idp, &cfg)
+	}
+	ev := &events{}
+	a, err := auth.New(context.Background(), cfg, repo, sealer, ev)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +152,7 @@ func newHarness(t *testing.T) *harness {
 	mux.HandleFunc("GET /done", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("landed")) })
 
 	jar, _ := cookiejar.New(nil)
-	return &harness{app: app, client: &http.Client{Jar: jar}, repo: repo}
+	return &harness{app: app, client: &http.Client{Jar: jar}, repo: repo, events: ev}
 }
 
 func (h *harness) get(t *testing.T, path string) (int, string) {
@@ -168,6 +211,75 @@ func TestLoginFlow(t *testing.T) {
 	if code, _ := h.get(t, "/api/me"); code != http.StatusUnauthorized {
 		t.Fatalf("after logout /api/me = %d, want 401", code)
 	}
+	if got := strings.Join(h.events.actions(), " "); got != "auth.login:success auth.logout:success" {
+		t.Fatalf("audit trail = %q", got)
+	}
+}
+
+func (h *harness) login(t *testing.T) *domain.User {
+	t.Helper()
+	resp, err := h.client.Get(h.app.URL + "/auth/login?return_to=/done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Request.URL.Path != "/done" {
+		t.Fatalf("login flow ended on %s (%d)", resp.Request.URL, resp.StatusCode)
+	}
+	for _, u := range h.repo.users {
+		return u
+	}
+	t.Fatal("no user created")
+	return nil
+}
+
+func withGroups(claims map[string]any, claim string, adminGroups ...string) option {
+	return func(p *oidcmock.Provider, c *auth.Config) {
+		p.User.Claims = claims
+		c.GroupsClaim = claim
+		c.AdminGroups = adminGroups
+	}
+}
+
+func TestAdminRoleFromGroups(t *testing.T) {
+	cases := []struct {
+		name  string
+		opt   option
+		admin bool
+	}{
+		{"member of an admin group", withGroups(map[string]any{"groups": []any{"staff", "c2d-admins"}}, "groups", "c2d-admins"), true},
+		{"not a member", withGroups(map[string]any{"groups": []any{"staff"}}, "groups", "c2d-admins"), false},
+		{"single string claim", withGroups(map[string]any{"role": "c2d-admins"}, "role", "c2d-admins"), true},
+		{"nested claim", withGroups(map[string]any{"realm_access": map[string]any{"roles": []any{"admin"}}}, "realm_access.roles", "admin"), true},
+		{"namespaced claim with dots", withGroups(map[string]any{"https://acme.example/groups": []any{"admin"}}, "https://acme.example/groups", "admin"), true},
+		{"no admin group configured", withGroups(map[string]any{"groups": []any{"c2d-admins"}}, "groups"), false},
+		{"claim missing", withGroups(map[string]any{}, "groups", "c2d-admins"), false},
+		{"claim only in UserInfo", func(p *oidcmock.Provider, c *auth.Config) {
+			withGroups(map[string]any{"groups": []any{"c2d-admins"}}, "groups", "c2d-admins")(p, c)
+			p.ClaimsInUserInfoOnly = true
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, tc.opt)
+			if u := h.login(t); u.IsAdmin != tc.admin {
+				t.Fatalf("IsAdmin = %v, want %v", u.IsAdmin, tc.admin)
+			}
+		})
+	}
+}
+
+func TestAdminRoleIsRevokedAtNextLogin(t *testing.T) {
+	var idp *oidcmock.Provider
+	h := newHarness(t, withGroups(map[string]any{"groups": []any{"c2d-admins"}}, "groups", "c2d-admins"),
+		func(p *oidcmock.Provider, _ *auth.Config) { idp = p })
+	if !h.login(t).IsAdmin {
+		t.Fatal("expected admin")
+	}
+	idp.User.Claims = map[string]any{"groups": []any{}}
+	if h.login(t).IsAdmin {
+		t.Fatal("admin role kept after leaving the group")
+	}
 }
 
 func TestCallbackRejectsForgedState(t *testing.T) {
@@ -186,6 +298,9 @@ func TestCallbackRejectsForgedState(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("forged state accepted: %d", resp.StatusCode)
+	}
+	if got := strings.Join(h.events.actions(), " "); got != "auth.login:failure" {
+		t.Fatalf("failed login not audited: %q", got)
 	}
 }
 

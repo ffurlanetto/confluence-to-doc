@@ -25,7 +25,11 @@ func main() {
 	pat := flag.String("pat", "dev-pat", "the only personal access token accepted by the fake Confluence")
 	flag.Parse()
 
-	idp := oidcmock.New("confluence-to-doc", "dev-secret", oidcmock.User{Subject: "dev-user", Email: "dev@example.com", Name: "Dev User"})
+	idp := oidcmock.New("confluence-to-doc", "dev-secret", oidcmock.User{
+		Subject: "dev-user", Email: "dev@example.com", Name: "Dev User",
+		// Matches OIDC_ADMIN_GROUPS in .env.example and docker-compose.yml.
+		Claims: map[string]any{"groups": []any{"c2d-users", "c2d-admins"}},
+	})
 	idp.Issuer = *issuer
 
 	conf := fake.New(*pat)

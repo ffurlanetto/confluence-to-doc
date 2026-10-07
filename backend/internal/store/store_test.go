@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,5 +203,97 @@ func TestExpiryAndDeletion(t *testing.T) {
 	}
 	if _, err := s.DeleteExport(ctx, e.ID, u.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
+	}
+}
+
+func TestAuditEvents(t *testing.T) {
+	s := testutil.NewStore(t)
+	ctx := context.Background()
+	alice, bob := uuid.New(), uuid.New()
+
+	var ids []uuid.UUID
+	for i, ev := range []domain.AuditEvent{
+		{ActorID: &alice, ActorEmail: "alice@example.com", Action: "auth.login", Outcome: domain.AuditSuccess},
+		{ActorID: &bob, ActorEmail: "bob@example.com", Action: "export.create", Outcome: domain.AuditSuccess,
+			TargetType: "export", TargetID: "x", Details: map[string]any{"format": "pdf", "pages": 3}},
+		{ActorID: &alice, ActorEmail: "alice@example.com", Action: "export.create", Outcome: domain.AuditSuccess},
+		{Action: "export.expire", Outcome: domain.AuditSuccess},
+	} {
+		ev.ID = uuid.Must(uuid.NewV7())
+		ev.OccurredAt = time.Now().Add(time.Duration(i) * time.Millisecond)
+		if err := s.InsertAuditEvent(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, ev.ID)
+	}
+
+	all, err := s.ListAuditEvents(ctx, domain.AuditFilter{})
+	if err != nil || len(all) != 4 || all[0].ID != ids[3] {
+		t.Fatalf("list all: %d events, err %v", len(all), err)
+	}
+	if all[2].Details["format"] != "pdf" || all[2].Details["pages"] != float64(3) || all[3].ActorID == nil || *all[3].ActorID != alice {
+		t.Errorf("round trip lost data: %+v", all[2])
+	}
+	if all[0].ActorID != nil {
+		t.Error("system event must have no actor")
+	}
+
+	byActor, _ := s.ListAuditEvents(ctx, domain.AuditFilter{Actor: "ALICE"})
+	byAction, _ := s.ListAuditEvents(ctx, domain.AuditFilter{Action: "export.create"})
+	both, _ := s.ListAuditEvents(ctx, domain.AuditFilter{Actor: "alice", Action: "export.create"})
+	wildcard, _ := s.ListAuditEvents(ctx, domain.AuditFilter{Actor: "%"})
+	if len(byActor) != 2 || len(byAction) != 2 || len(both) != 1 || len(wildcard) != 0 {
+		t.Errorf("filters: actor=%d action=%d both=%d wildcard=%d", len(byActor), len(byAction), len(both), len(wildcard))
+	}
+
+	page1, _ := s.ListAuditEvents(ctx, domain.AuditFilter{Limit: 3})
+	page2, _ := s.ListAuditEvents(ctx, domain.AuditFilter{Limit: 3, Before: &page1[2].ID})
+	if len(page1) != 3 || len(page2) != 1 || page2[0].ID != ids[0] {
+		t.Errorf("pagination: %d then %d", len(page1), len(page2))
+	}
+
+	future := time.Now().Add(time.Hour)
+	if none, _ := s.ListAuditEvents(ctx, domain.AuditFilter{From: &future}); len(none) != 0 {
+		t.Errorf("from filter returned %d events", len(none))
+	}
+}
+
+func TestAuditEventsAreAppendOnly(t *testing.T) {
+	s := testutil.NewStore(t)
+	ctx := context.Background()
+	ev := domain.AuditEvent{ID: uuid.Must(uuid.NewV7()), OccurredAt: time.Now().Add(-400 * 24 * time.Hour),
+		Action: "auth.login", Outcome: domain.AuditSuccess}
+	if err := s.InsertAuditEvent(ctx, ev); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertAuditEvent(ctx, domain.AuditEvent{ID: uuid.Must(uuid.NewV7()), OccurredAt: time.Now(),
+		Action: "auth.login", Outcome: domain.AuditSuccess}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Pool().Exec(ctx, `UPDATE audit_events SET action = 'tampered'`); err == nil ||
+		!strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("update must be refused, got %v", err)
+	}
+	n, err := s.PurgeAuditEvents(ctx, 365*24*time.Hour)
+	if err != nil || n != 1 {
+		t.Fatalf("purge: n=%d err=%v", n, err)
+	}
+}
+
+func TestRecordLogin(t *testing.T) {
+	s := testutil.NewStore(t)
+	ctx := context.Background()
+	u, _ := s.UpsertUser(ctx, "iss", "admin-sub", "a@b.c", "A")
+	if u.IsAdmin {
+		t.Fatal("new users are not admins")
+	}
+	if err := s.RecordLogin(ctx, u.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	hash := []byte("admin-session-hash-000000000000")
+	_ = s.CreateSession(ctx, hash, u.ID, time.Now().Add(time.Hour))
+	got, _, err := s.SessionUser(ctx, hash)
+	if err != nil || !got.IsAdmin {
+		t.Fatalf("session user admin=%v err=%v", got != nil && got.IsAdmin, err)
 	}
 }

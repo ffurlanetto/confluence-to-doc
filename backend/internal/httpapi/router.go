@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 
@@ -44,15 +45,29 @@ type Exports interface {
 	Open(ctx context.Context, id, userID uuid.UUID) (*domain.Export, io.ReadSeekCloser, error)
 }
 
+// Auditor records security events (implemented by audit.Recorder).
+type Auditor interface {
+	Record(ctx context.Context, e domain.AuditEvent)
+}
+
+// AuditLog reads the audit trail back.
+type AuditLog interface {
+	ListAuditEvents(ctx context.Context, f domain.AuditFilter) ([]domain.AuditEvent, error)
+}
+
 type Deps struct {
-	Auth      Authenticator
-	Accounts  Accounts
-	Exports   Exports
-	Ready     func(context.Context) error
-	PublicURL *url.URL
-	StaticDir string
-	Retention time.Duration
-	MaxPages  int
+	Auth     Authenticator
+	Accounts Accounts
+	Exports  Exports
+	Audit    Auditor
+	AuditLog AuditLog
+	// TrustedProxies may set X-Forwarded-For (see config.TrustedProxies).
+	TrustedProxies []netip.Prefix
+	Ready          func(context.Context) error
+	PublicURL      *url.URL
+	StaticDir      string
+	Retention      time.Duration
+	MaxPages       int
 	// DocumentTemplate is the company Word template file name, empty when
 	// documents use the built-in styling.
 	DocumentTemplate string
@@ -61,7 +76,7 @@ type Deps struct {
 func NewRouter(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, traceRoute, accessLog, middleware.Recoverer,
-		securityHeaders(d.PublicURL.Scheme == "https"))
+		securityHeaders(d.PublicURL.Scheme == "https"), requestInfo(d.TrustedProxies))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -104,6 +119,11 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/exports/{exportID}", h.getExport)
 		r.Delete("/exports/{exportID}", h.deleteExport)
 		r.Get("/exports/{exportID}/download", h.download)
+
+		r.Route("/admin", func(r chi.Router) {
+			r.Use(h.requireAdmin)
+			r.Get("/audit", h.listAudit)
+		})
 	})
 
 	if d.StaticDir != "" {
