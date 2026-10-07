@@ -45,6 +45,12 @@ oidc:
   existingSecret: ""
   existingSecretKey: OIDC_CLIENT_SECRET
   scopes: "openid profile email"
+  # -- Claim listing the user's groups or roles. Use a dotted path for nested
+  # claims, e.g. "realm_access.roles" (Keycloak) or "roles" (Entra ID app roles).
+  groupsClaim: groups
+  # -- Groups (or roles) granting access to the administration pages. With
+  # Entra ID group claims, these are group object ids.
+  adminGroups: []
 
 # -- 32 random bytes, base64 (`openssl rand -base64 32`), encrypting the users'
 # Confluence tokens. Changing it forces every user to enter their token again,
@@ -54,6 +60,16 @@ existingEncryptionKeySecret: ""
 existingEncryptionKeySecretKey: ENCRYPTION_KEY
 
 sessionTtl: 12h
+
+audit:
+  # -- How long audit events stay in the database (minimum 720h). The SIEM
+  # keeps its own copy from the logs.
+  retention: 8760h
+
+# -- Address ranges of the reverse proxies (ingress controller, load balancer)
+# allowed to set X-Forwarded-For. The audit trail records the client address
+# they report; with an empty list it records the proxy's own address.
+trustedProxies: []
 
 # -- Where generated documents are stored.
 #

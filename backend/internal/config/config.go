@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -46,6 +47,11 @@ type Config struct {
 	OIDC OIDCConfig
 
 	SessionTTL time.Duration
+	// AuditRetention is how long audit events are kept in the database.
+	AuditRetention time.Duration
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For header is
+	// believed when recording a client's address. Empty trusts nobody.
+	TrustedProxies []netip.Prefix
 	// EncryptionKey is a 32-byte AES-256 key used to encrypt PATs at rest.
 	EncryptionKey []byte
 
@@ -99,6 +105,10 @@ type OIDCConfig struct {
 	ClientID     string
 	ClientSecret string
 	Scopes       []string
+	// GroupsClaim names the claim carrying groups or roles (dotted path for
+	// nested claims); AdminGroups are the values granting the admin role.
+	GroupsClaim string
+	AdminGroups []string
 }
 
 type ExportConfig struct {
@@ -123,6 +133,10 @@ type ExportConfig struct {
 	// document, for the document management systems that sort on it.
 	Classification string
 }
+
+// minAuditRetention keeps an investigation possible: a security incident is
+// often noticed weeks after the fact.
+const minAuditRetention = 30 * 24 * time.Hour
 
 // metricPrefixPattern keeps prefixes portable across metric backends; the
 // trailing separator added by metricPrefix is allowed here too.
@@ -157,8 +171,12 @@ func load(getenv func(string) string) (*Config, error) {
 			ClientID:     e.required("OIDC_CLIENT_ID"),
 			ClientSecret: e.required("OIDC_CLIENT_SECRET"),
 			Scopes:       e.list("OIDC_SCOPES", []string{"openid", "profile", "email"}),
+			GroupsClaim:  e.str("OIDC_GROUPS_CLAIM", "groups"),
+			AdminGroups:  e.csv("OIDC_ADMIN_GROUPS"),
 		},
 		SessionTTL:        e.duration("SESSION_TTL", 12*time.Hour),
+		AuditRetention:    e.duration("AUDIT_RETENTION", 365*24*time.Hour),
+		TrustedProxies:    e.prefixes("TRUSTED_PROXIES"),
 		ConfluenceTimeout: e.duration("CONFLUENCE_TIMEOUT", 30*time.Second),
 		Export: ExportConfig{
 			StorageDir:        e.str("EXPORT_STORAGE_DIR", "./data/exports"),
@@ -226,6 +244,9 @@ func (c *Config) validate() error {
 	}
 	if c.Export.Retention <= 0 {
 		errs = append(errs, errors.New("EXPORT_RETENTION must be > 0"))
+	}
+	if c.AuditRetention < minAuditRetention {
+		errs = append(errs, fmt.Errorf("AUDIT_RETENTION must be at least %s", minAuditRetention))
 	}
 	if c.Export.ConfluenceWorkers < 1 {
 		errs = append(errs, errors.New("CONFLUENCE_FETCH_CONCURRENCY must be >= 1"))
@@ -340,6 +361,41 @@ func (e *envReader) list(key string, def []string) []string {
 		return def
 	}
 	return strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' })
+}
+
+// csv splits a comma-separated list, keeping inner spaces: group names such
+// as "Confluence Export Admins" are legitimate.
+func (e *envReader) csv(key string) []string {
+	var out []string
+	for _, item := range strings.Split(e.str(key, ""), ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// prefixes reads a list of CIDR ranges or single addresses.
+func (e *envReader) prefixes(key string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, item := range e.csv(key) {
+		if !strings.Contains(item, "/") {
+			addr, err := netip.ParseAddr(item)
+			if err != nil {
+				e.errs = append(e.errs, fmt.Errorf("%s: invalid address %q", key, item))
+				continue
+			}
+			out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+			continue
+		}
+		p, err := netip.ParsePrefix(item)
+		if err != nil {
+			e.errs = append(e.errs, fmt.Errorf("%s: invalid CIDR range %q", key, item))
+			continue
+		}
+		out = append(out, p.Masked())
+	}
+	return out
 }
 
 func (e *envReader) url(key, def string) *url.URL {

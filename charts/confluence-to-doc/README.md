@@ -61,6 +61,13 @@ the values below map onto it.
 | `encryptionKey` **or** `existingEncryptionKeySecret` | 32 random bytes, base64                  |
 | `storage.s3.bucket` (when `storage.type: s3`) | Bucket for generated documents              |
 
+### Administrators and audit
+
+`oidc.adminGroups` lists the groups (or roles, with `oidc.groupsClaim: roles`) whose members see the
+administration pages. Set `trustedProxies` to the address range of the ingress controller so the audit
+trail records the client address rather than the controller's; `audit.retention` bounds how long events
+stay in the database. See [docs/configuration.md](../../docs/configuration.md#audit-trail).
+
 ### Storage
 
 `storage.type: s3` is the default and the one that fits Kubernetes: API and worker pods then share nothing.

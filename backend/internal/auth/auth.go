@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 )
@@ -36,6 +37,12 @@ type Repo interface {
 	CreateSession(ctx context.Context, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	SessionUser(ctx context.Context, tokenHash []byte) (*domain.User, *domain.Session, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
+	RecordLogin(ctx context.Context, userID uuid.UUID, isAdmin bool) error
+}
+
+// Auditor records security events (implemented by audit.Recorder).
+type Auditor interface {
+	Record(ctx context.Context, e domain.AuditEvent)
 }
 
 type Config struct {
@@ -46,12 +53,20 @@ type Config struct {
 	PublicURL    *url.URL
 	SessionTTL   time.Duration
 	SecureCookie bool
+	// GroupsClaim is the claim listing the user's groups or roles, as a
+	// dotted path for nested claims (e.g. "realm_access.roles").
+	GroupsClaim string
+	// AdminGroups grants the admin role to members of any of these groups.
+	// Empty means nobody is an administrator.
+	AdminGroups []string
 }
 
 type Authenticator struct {
 	cfg           Config
 	repo          Repo
 	sealer        *crypto.Sealer
+	audit         Auditor
+	provider      *oidc.Provider
 	oauth         oauth2.Config
 	verifier      *oidc.IDTokenVerifier
 	issuer        string
@@ -61,7 +76,7 @@ type Authenticator struct {
 }
 
 // New performs OIDC discovery against the issuer.
-func New(ctx context.Context, cfg Config, repo Repo, sealer *crypto.Sealer) (*Authenticator, error) {
+func New(ctx context.Context, cfg Config, repo Repo, sealer *crypto.Sealer, auditor Auditor) (*Authenticator, error) {
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("OIDC discovery for %s: %w", cfg.IssuerURL, err)
@@ -76,9 +91,11 @@ func New(ctx context.Context, cfg Config, repo Repo, sealer *crypto.Sealer) (*Au
 		scopes = []string{oidc.ScopeOpenID, "profile", "email"}
 	}
 	a := &Authenticator{
-		cfg:    cfg,
-		repo:   repo,
-		sealer: sealer,
+		cfg:      cfg,
+		repo:     repo,
+		sealer:   sealer,
+		audit:    auditor,
+		provider: provider,
 		oauth: oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
@@ -173,7 +190,12 @@ func (a *Authenticator) Callback(w http.ResponseWriter, r *http.Request) {
 		Name              string `json:"name"`
 		PreferredUsername string `json:"preferred_username"`
 	}
+	var rawClaims map[string]any
 	if err := idToken.Claims(&claims); err != nil {
+		a.fail(w, r, "login failed", err)
+		return
+	}
+	if err := idToken.Claims(&rawClaims); err != nil {
 		a.fail(w, r, "login failed", err)
 		return
 	}
@@ -183,6 +205,11 @@ func (a *Authenticator) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := a.repo.UpsertUser(ctx, idToken.Issuer, idToken.Subject, claims.Email, name)
 	if err != nil {
+		a.fail(w, r, "login failed", err)
+		return
+	}
+	user.IsAdmin = a.isAdmin(ctx, rawClaims, tok)
+	if err := a.repo.RecordLogin(ctx, user.ID, user.IsAdmin); err != nil {
 		a.fail(w, r, "login failed", err)
 		return
 	}
@@ -198,13 +225,94 @@ func (a *Authenticator) Callback(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, Secure: a.cfg.SecureCookie, SameSite: http.SameSiteLaxMode,
 	})
 	slog.InfoContext(ctx, "user logged in", "user_id", user.ID)
+	actorID, email := audit.Actor(user)
+	a.audit.Record(ctx, domain.AuditEvent{
+		ActorID: actorID, ActorEmail: email, Action: audit.ActionLogin, Outcome: domain.AuditSuccess,
+		TargetType: audit.TargetUser, TargetID: user.ID.String(),
+		Details: map[string]any{"admin": user.IsAdmin, "subject": user.Subject},
+	})
 	http.Redirect(w, r, fs.ReturnTo, http.StatusFound)
+}
+
+// isAdmin reports whether the user belongs to one of the admin groups. The
+// groups claim is read from the ID token, or from the UserInfo endpoint when
+// the provider only exposes it there (a common Keycloak setup).
+func (a *Authenticator) isAdmin(ctx context.Context, idClaims map[string]any, tok *oauth2.Token) bool {
+	if len(a.cfg.AdminGroups) == 0 {
+		return false
+	}
+	groups, found := claimValues(idClaims, a.cfg.GroupsClaim)
+	if !found {
+		info, err := a.provider.UserInfo(ctx, oauth2.StaticTokenSource(tok))
+		var infoClaims map[string]any
+		if err == nil {
+			err = info.Claims(&infoClaims)
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "groups claim not in the ID token and UserInfo unavailable", "claim", a.cfg.GroupsClaim, "err", err)
+			return false
+		}
+		groups, found = claimValues(infoClaims, a.cfg.GroupsClaim)
+		if !found {
+			slog.WarnContext(ctx, "groups claim not found in the ID token nor UserInfo", "claim", a.cfg.GroupsClaim)
+			return false
+		}
+	}
+	for _, g := range groups {
+		for _, admin := range a.cfg.AdminGroups {
+			if g == admin {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// claimValues reads a claim holding a string or a list of strings. path is
+// first looked up as a whole (namespaced claims such as
+// "https://example.com/groups" contain dots), then as a dotted path into
+// nested objects.
+func claimValues(claims map[string]any, path string) ([]string, bool) {
+	v, ok := claims[path]
+	if !ok {
+		var cur any = claims
+		for _, part := range strings.Split(path, ".") {
+			m, isMap := cur.(map[string]any)
+			if !isMap {
+				return nil, false
+			}
+			if cur, ok = m[part]; !ok {
+				return nil, false
+			}
+		}
+		v = cur
+	}
+	switch t := v.(type) {
+	case string:
+		return []string{t}, true
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, isString := item.(string); isString {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // Logout destroys the session and returns the IdP logout URL (if any) so the
 // SPA can also end the single sign-on session.
 func (a *Authenticator) Logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(a.sessionCookie); err == nil && c.Value != "" {
+	if c, err := r.Cookie(a.sessionCookie); err == nil && c.Value != "" && len(c.Value) <= 256 {
+		if user, _, err := a.repo.SessionUser(r.Context(), hashToken(c.Value)); err == nil {
+			actorID, email := audit.Actor(user)
+			a.audit.Record(r.Context(), domain.AuditEvent{
+				ActorID: actorID, ActorEmail: email, Action: audit.ActionLogout, Outcome: domain.AuditSuccess,
+				TargetType: audit.TargetUser, TargetID: user.ID.String(),
+			})
+		}
 		if err := a.repo.DeleteSession(r.Context(), hashToken(c.Value)); err != nil {
 			slog.ErrorContext(r.Context(), "deleting session", "err", err)
 		}
@@ -290,6 +398,10 @@ func (a *Authenticator) readFlow(r *http.Request) (*flowState, error) {
 
 func (a *Authenticator) fail(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	slog.WarnContext(r.Context(), "authentication failed", "reason", msg, "err", err)
+	a.audit.Record(r.Context(), domain.AuditEvent{
+		Action: audit.ActionLogin, Outcome: domain.AuditFailure,
+		Details: map[string]any{"reason": msg},
+	})
 	http.Error(w, msg, http.StatusUnauthorized)
 }
 

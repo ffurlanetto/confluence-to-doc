@@ -47,4 +47,4 @@ export const prefs = {
   maxPages: 500,
 };
 
-export const me = { id: 'u1', email: 'alice@example.com', name: 'Alice' };
+export const me = { id: 'u1', email: 'alice@example.com', name: 'Alice', isAdmin: false };

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,9 @@ type User struct {
 	Subject string
 	Email   string
 	Name    string
+	// Claims are extra claims (e.g. "groups") added to the ID token, or only
+	// served by the UserInfo endpoint when ClaimsInUserInfoOnly is set.
+	Claims map[string]any
 }
 
 type Provider struct {
@@ -31,10 +35,14 @@ type Provider struct {
 	ClientID     string
 	ClientSecret string
 	User         User
+	// ClaimsInUserInfoOnly mimics providers that leave groups out of the ID
+	// token and only expose them through UserInfo.
+	ClaimsInUserInfoOnly bool
 
-	key   *rsa.PrivateKey
-	mu    sync.Mutex
-	codes map[string]grant
+	key    *rsa.PrivateKey
+	mu     sync.Mutex
+	codes  map[string]grant
+	tokens map[string]bool
 }
 
 type grant struct {
@@ -47,7 +55,8 @@ func New(clientID, clientSecret string, user User) *Provider {
 	if err != nil {
 		panic(err)
 	}
-	return &Provider{ClientID: clientID, ClientSecret: clientSecret, User: user, key: key, codes: map[string]grant{}}
+	return &Provider{ClientID: clientID, ClientSecret: clientSecret, User: user, key: key,
+		codes: map[string]grant{}, tokens: map[string]bool{}}
 }
 
 func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +67,7 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"authorization_endpoint":                p.Issuer + "/authorize",
 			"token_endpoint":                        p.Issuer + "/token",
 			"jwks_uri":                              p.Issuer + "/jwks",
+			"userinfo_endpoint":                     p.Issuer + "/userinfo",
 			"end_session_endpoint":                  p.Issuer + "/logout",
 			"response_types_supported":              []string{"code"},
 			"subject_types_supported":               []string{"public"},
@@ -70,6 +80,8 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.authorize(w, r)
 	case "/token":
 		p.token(w, r)
+	case "/userinfo":
+		p.userinfo(w, r)
 	case "/logout":
 		if u := r.URL.Query().Get("post_logout_redirect_uri"); u != "" {
 			http.Redirect(w, r, u, http.StatusFound)
@@ -135,18 +147,44 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	idToken, err := jwt.Signed(signer).Claims(map[string]any{
+	claims := map[string]any{
 		"iss": p.Issuer, "sub": p.User.Subject, "aud": p.ClientID,
 		"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(), "nonce": g.nonce,
 		"email": p.User.Email, "name": p.User.Name,
-	}).Serialize()
+	}
+	if !p.ClaimsInUserInfoOnly {
+		for k, v := range p.User.Claims {
+			claims[k] = v
+		}
+	}
+	idToken, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	access := randString()
+	p.mu.Lock()
+	p.tokens[access] = true
+	p.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token": randString(), "token_type": "Bearer", "expires_in": 300, "id_token": idToken,
+		"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": idToken,
 	})
+}
+
+func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	p.mu.Lock()
+	valid := ok && p.tokens[token]
+	p.mu.Unlock()
+	if !valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	claims := map[string]any{"sub": p.User.Subject, "email": p.User.Email, "name": p.User.Name}
+	for k, v := range p.User.Claims {
+		claims[k] = v
+	}
+	writeJSON(w, http.StatusOK, claims)
 }
 
 func oauthError(w http.ResponseWriter, code string) {

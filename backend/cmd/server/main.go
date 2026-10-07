@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/config"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
@@ -96,6 +97,7 @@ func run() error {
 		return err
 	}
 	accounts := account.NewService(db, sealer, cfg.ConfluenceBaseURL, cfg.ConfluenceTimeout)
+	auditor := audit.New(db, nil)
 
 	// The company Word template is validated at startup: a broken template
 	// must stop the process, not every export.
@@ -128,9 +130,10 @@ func run() error {
 			UseTemplateStyles: template != nil,
 			Classification:    cfg.Export.Classification,
 			ShutdownGrace:     20 * time.Second,
+			Audit:             auditor,
 		})
 		notify = pool.Notify
-		janitor := export.NewJanitor(db, blobs, cfg.Export.JanitorInterval)
+		janitor := export.NewJanitor(db, blobs, cfg.Export.JanitorInterval).WithAudit(auditor, db, cfg.AuditRetention)
 		wg.Add(2)
 		go func() { defer wg.Done(); pool.Run(ctx) }()
 		go func() { defer wg.Done(); janitor.Run(ctx) }()
@@ -144,7 +147,7 @@ func run() error {
 
 	var servers []*http.Server
 	if cfg.Role.RunsAPI() {
-		authenticator, err := connectOIDC(ctx, cfg, db, sealer)
+		authenticator, err := connectOIDC(ctx, cfg, db, sealer, auditor)
 		if err != nil {
 			return err
 		}
@@ -152,6 +155,9 @@ func run() error {
 			Auth:             authenticator,
 			Accounts:         accounts,
 			Exports:          export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
+			Audit:            auditor,
+			AuditLog:         db,
+			TrustedProxies:   cfg.TrustedProxies,
 			Ready:            db.Ping,
 			PublicURL:        cfg.PublicURL,
 			StaticDir:        cfg.StaticDir,
@@ -284,14 +290,18 @@ func newServer(addr string, h http.Handler) *http.Server {
 
 // connectOIDC retries discovery so the app can start before its IdP (e.g.
 // in docker compose) without crash-looping.
-func connectOIDC(ctx context.Context, cfg *config.Config, db *store.Store, sealer *crypto.Sealer) (*auth.Authenticator, error) {
+func connectOIDC(ctx context.Context, cfg *config.Config, db *store.Store, sealer *crypto.Sealer, auditor *audit.Recorder) (*auth.Authenticator, error) {
 	acfg := auth.Config{
 		IssuerURL: cfg.OIDC.IssuerURL, ClientID: cfg.OIDC.ClientID, ClientSecret: cfg.OIDC.ClientSecret,
 		Scopes: cfg.OIDC.Scopes, PublicURL: cfg.PublicURL, SessionTTL: cfg.SessionTTL, SecureCookie: cfg.SecureCookies(),
+		GroupsClaim: cfg.OIDC.GroupsClaim, AdminGroups: cfg.OIDC.AdminGroups,
+	}
+	if len(acfg.AdminGroups) == 0 {
+		slog.Warn("OIDC_ADMIN_GROUPS is empty: nobody can use the administration pages")
 	}
 	var lastErr error
 	for attempt := range 30 {
-		a, err := auth.New(ctx, acfg, db, sealer)
+		a, err := auth.New(ctx, acfg, db, sealer, auditor)
 		if err == nil {
 			return a, nil
 		}

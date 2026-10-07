@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence/fake"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
@@ -26,6 +27,7 @@ import (
 
 // headerAuth authenticates requests with an "X-Test-User" header naming a
 // user subject. It replaces OIDC, which is covered by the auth package tests.
+// Subjects starting with "admin" get the admin role.
 type headerAuth struct{ store *store.Store }
 
 func (headerAuth) Login(w http.ResponseWriter, _ *http.Request)    { w.WriteHeader(http.StatusFound) }
@@ -43,6 +45,7 @@ func (a headerAuth) Middleware(next http.Handler) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		u.IsAdmin = strings.HasPrefix(sub, "admin")
 		next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), u)))
 	})
 }
@@ -78,6 +81,7 @@ func newAPIWithWorker(t *testing.T, startWorker bool) *api {
 	pool := export.NewPool(s, acc, copyConverter{}, blobs, export.WorkerConfig{
 		Concurrency: 2, PollInterval: 20 * time.Millisecond, JobTimeout: time.Minute, Lease: 5 * time.Second,
 		Retention: 48 * time.Hour, MaxPages: 50, MaxImageBytes: 1 << 20, ConfluenceWorkers: 2,
+		Audit: audit.New(s, nil),
 	})
 	if startWorker {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -91,6 +95,8 @@ func newAPIWithWorker(t *testing.T, startWorker bool) *api {
 		Auth:      headerAuth{store: s},
 		Accounts:  acc,
 		Exports:   export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 3}, pool.Notify),
+		Audit:     audit.New(s, nil),
+		AuditLog:  s,
 		Ready:     s.Ping,
 		PublicURL: pub,
 		Retention: 48 * time.Hour,

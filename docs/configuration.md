@@ -28,6 +28,10 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `LOG_FORMAT`                   | `json`                  | `json` or `text`                                                |
 | `OIDC_SCOPES`                  | `openid profile email`  | Requested scopes                                                |
 | `SESSION_TTL`                  | `12h`                   | Session lifetime                                                |
+| `OIDC_GROUPS_CLAIM`            | `groups`                | Claim listing the user's groups or roles; a dotted path for nested claims (`realm_access.roles`) |
+| `OIDC_ADMIN_GROUPS`            | _(empty)_               | Comma-separated groups (or roles) granting the administration pages. Empty = no administrator |
+| `AUDIT_RETENTION`              | `8760h`                 | How long audit events stay in the database (minimum `720h`)     |
+| `TRUSTED_PROXIES`              | _(empty)_               | Comma-separated CIDRs of the reverse proxies allowed to set `X-Forwarded-For` (client address in the audit trail) |
 | `CONFLUENCE_TIMEOUT`           | `30s`                   | Timeout of a single Confluence request                          |
 | `CONFLUENCE_FETCH_CONCURRENCY` | `4`                     | Parallel Confluence requests per export                         |
 | `EXPORT_RETENTION`             | `48h`                   | How long a document stays downloadable                          |
@@ -190,6 +194,42 @@ Declare a **confidential** client with:
 - redirect URI: `${PUBLIC_URL}/auth/callback`;
 - post-logout redirect URI: `${PUBLIC_URL}/`;
 - scopes: `openid profile email`.
+
+### Administrators
+
+Every authenticated user can export. The **administration pages** (audit trail today) are reserved to
+members of `OIDC_ADMIN_GROUPS`, read from the claim named by `OIDC_GROUPS_CLAIM` in the ID token — or from
+the UserInfo endpoint when the provider only exposes it there. The role is re-evaluated at every sign-in:
+removing someone from the group takes effect at their next login (at most `SESSION_TTL` later).
+
+| Provider | Typical setting |
+| -------- | --------------- |
+| Keycloak | Add a *Group Membership* mapper (claim `groups`, full path off) to the client, or use realm roles with `OIDC_GROUPS_CLAIM=realm_access.roles` |
+| Entra ID | Prefer **app roles** (`OIDC_GROUPS_CLAIM=roles`, `OIDC_ADMIN_GROUPS=<role value>`): group claims carry object ids and are left out above 200 groups (“overage”) |
+| Okta     | Add a `groups` claim to the ID token with a group filter |
+| Others   | Any claim holding a string or a list of strings; namespaced claims such as `https://example.com/groups` work as-is |
+
+## Audit trail
+
+Security-relevant actions are recorded: sign-in (and failed sign-in), sign-out, token saved or removed,
+preference changes, export requested, generated, failed, downloaded, deleted and expired, refused access to
+the administration pages, and reads of the audit trail itself. Each event carries the user, the target,
+the outcome, the client address, the user agent and the request id.
+
+Events are written to two places:
+
+- the `audit_events` table, append-only (updates are rejected by a trigger), shown to administrators under
+  **Audit** and purged after `AUDIT_RETENTION`;
+- a JSON log line on stdout tagged `"event.category": "audit"`, with
+  [Elastic Common Schema](https://www.elastic.co/guide/en/ecs/current/index.html) field names
+  (`event.action`, `event.outcome`, `user.email`, `source.ip`, …). Route these lines to your SIEM: it is the
+  tamper-proof copy, and it is written even when the database is unavailable.
+
+Behind a reverse proxy, set `TRUSTED_PROXIES` to its address range, otherwise every event records the
+proxy's address. Only proxies in that list may set `X-Forwarded-For`; it is read from the right, so a value
+forged by the client is ignored.
+
+The trail never contains a token, a cookie or document content — only titles, page ids, formats and sizes.
 
 ## Deployment
 

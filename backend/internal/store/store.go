@@ -53,10 +53,18 @@ func (s *Store) UpsertUser(ctx context.Context, issuer, subject, email, name str
 		INSERT INTO users (id, issuer, subject, email, name) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (issuer, subject) DO UPDATE
 		   SET email = EXCLUDED.email, name = EXCLUDED.name, updated_at = now()
-		RETURNING id, issuer, subject, email, name, created_at`,
+		RETURNING id, issuer, subject, email, name, is_admin, created_at`,
 		uuid.Must(uuid.NewV7()), issuer, subject, email, name,
-	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.CreatedAt)
+	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt)
 	return u, err
+}
+
+// RecordLogin stores the outcome of a successful login: the admin flag the
+// identity provider granted this time, and the login time.
+func (s *Store) RecordLogin(ctx context.Context, userID uuid.UUID, isAdmin bool) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET is_admin = $2, last_login_at = now() WHERE id = $1`, userID, isAdmin)
+	return err
 }
 
 // ------------------------------------------------------------- sessions
@@ -72,10 +80,10 @@ func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (*domain.User
 	u := &domain.User{}
 	sess := &domain.Session{}
 	err := s.pool.QueryRow(ctx, `
-		SELECT u.id, u.issuer, u.subject, u.email, u.name, u.created_at, s.expires_at
+		SELECT u.id, u.issuer, u.subject, u.email, u.name, u.is_admin, u.created_at, s.expires_at
 		  FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token_hash = $1 AND s.expires_at > now()`, tokenHash,
-	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.CreatedAt, &sess.ExpiresAt)
+	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt, &sess.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, domain.ErrNotFound
 	}

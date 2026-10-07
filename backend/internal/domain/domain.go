@@ -21,11 +21,14 @@ var (
 )
 
 type User struct {
-	ID        uuid.UUID
-	Issuer    string
-	Subject   string
-	Email     string
-	Name      string
+	ID      uuid.UUID
+	Issuer  string
+	Subject string
+	Email   string
+	Name    string
+	// IsAdmin is derived from the identity provider's group claim at each
+	// login (OIDC_ADMIN_GROUPS); it is never set through the API.
+	IsAdmin   bool
 	CreatedAt time.Time
 }
 
@@ -119,4 +122,47 @@ func (e *Export) Downloadable(now time.Time) error {
 type QueueStats struct {
 	Queued  int
 	Running int
+}
+
+// AuditOutcome tells whether an audited action happened.
+type AuditOutcome string
+
+const (
+	AuditSuccess AuditOutcome = "success"
+	AuditFailure AuditOutcome = "failure"
+	// AuditDenied is an action refused for lack of permission.
+	AuditDenied AuditOutcome = "denied"
+)
+
+// AuditEvent is one entry of the security audit trail: who did what, to
+// what, from where, and whether it worked. Events are append-only.
+type AuditEvent struct {
+	ID         uuid.UUID
+	OccurredAt time.Time
+	// ActorID is nil for actions performed by the system (e.g. retention).
+	ActorID    *uuid.UUID
+	ActorEmail string
+	Action     string
+	Outcome    AuditOutcome
+	TargetType string
+	TargetID   string
+	ClientIP   string
+	UserAgent  string
+	RequestID  string
+	// Details holds action-specific context. Never put secrets or document
+	// contents in it.
+	Details map[string]any
+}
+
+// AuditFilter selects audit events, newest first. Zero values match all.
+type AuditFilter struct {
+	ActorID *uuid.UUID
+	// Actor matches a substring of the actor's email, case-insensitively.
+	Actor  string
+	Action string
+	From   *time.Time
+	To     *time.Time
+	// Before is the pagination cursor: only events older than this id.
+	Before *uuid.UUID
+	Limit  int
 }

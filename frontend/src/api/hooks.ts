@@ -1,7 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { api } from './client';
-import type { CreateExportRequest, Export, ExportFormat } from './types';
+import type { AuditFilter, CreateExportRequest, Export, ExportFormat } from './types';
 
 export const queryKeys = {
   me: ['me'] as const,
@@ -9,6 +9,7 @@ export const queryKeys = {
   exports: ['exports'] as const,
   search: (q: string) => ['search', q] as const,
   children: (id: string) => ['children', id] as const,
+  audit: (filter: AuditFilter) => ['audit', filter] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: queryKeys.me, queryFn: api.me, staleTime: Infinity });
@@ -81,3 +82,12 @@ export const useSetDefaultFormat = () => {
     onSuccess: (prefs) => qc.setQueryData(queryKeys.preferences, prefs),
   });
 };
+
+/** Pages through the audit trail, newest first. */
+export const useAuditEvents = (filter: AuditFilter) =>
+  useInfiniteQuery({
+    queryKey: queryKeys.audit(filter),
+    queryFn: ({ pageParam }) => api.auditEvents(filter, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor,
+  });

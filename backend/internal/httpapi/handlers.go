@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
@@ -34,14 +35,15 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 // ------------------------------------------------------------------ me
 
 type meResponse struct {
-	ID    uuid.UUID `json:"id"`
-	Email string    `json:"email"`
-	Name  string    `json:"name"`
+	ID      uuid.UUID `json:"id"`
+	Email   string    `json:"email"`
+	Name    string    `json:"name"`
+	IsAdmin bool      `json:"isAdmin"`
 }
 
 func (h *handlers) me(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
-	writeJSON(w, http.StatusOK, meResponse{ID: u.ID, Email: u.Email, Name: u.Name})
+	writeJSON(w, http.StatusOK, meResponse{ID: u.ID, Email: u.Email, Name: u.Name, IsAdmin: u.IsAdmin})
 }
 
 // --------------------------------------------------------- preferences
@@ -90,6 +92,7 @@ func (h *handlers) putPreferences(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, err)
 		return
 	}
+	h.record(r, domain.AuditEvent{Action: audit.ActionPreferences, Details: map[string]any{"defaultFormat": string(f)}})
 	h.getPreferences(w, r)
 }
 
@@ -102,9 +105,13 @@ func (h *handlers) putPAT(w http.ResponseWriter, r *http.Request) {
 	}
 	cu, err := h.d.Accounts.SetPAT(r.Context(), auth.UserFrom(r.Context()).ID, req.Token)
 	if err != nil {
+		// Never the token itself: only that a rejected one was submitted.
+		h.record(r, domain.AuditEvent{Action: audit.ActionPATSet, Outcome: domain.AuditFailure,
+			Details: map[string]any{"reason": errorReason(err)}})
 		handleError(w, r, err)
 		return
 	}
+	h.record(r, domain.AuditEvent{Action: audit.ActionPATSet, Details: map[string]any{"confluenceUser": cu.Username}})
 	writeJSON(w, http.StatusOK, map[string]string{"confluenceUser": cu.DisplayName})
 }
 
@@ -113,6 +120,7 @@ func (h *handlers) deletePAT(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, err)
 		return
 	}
+	h.record(r, domain.AuditEvent{Action: audit.ActionPATDelete})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -280,6 +288,11 @@ func (h *handlers) createExport(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, err)
 		return
 	}
+	h.record(r, domain.AuditEvent{
+		Action: audit.ActionExportCreate, TargetType: audit.TargetExport, TargetID: e.ID.String(),
+		Details: map[string]any{"pageId": page.ID, "title": page.Title, "space": page.SpaceKey,
+			"format": string(format), "includeChildren": includeChildren},
+	})
 	w.Header().Set("Location", "/api/exports/"+e.ID.String())
 	writeJSON(w, http.StatusAccepted, toDTO(e))
 }
@@ -315,6 +328,7 @@ func (h *handlers) deleteExport(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, err)
 		return
 	}
+	h.record(r, domain.AuditEvent{Action: audit.ActionExportDelete, TargetType: audit.TargetExport, TargetID: id.String()})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -330,6 +344,15 @@ func (h *handlers) download(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	name := fileName(e.RootTitle, e.Format)
+	// A resumed download arrives as several range requests: record the one
+	// that starts the file, not every chunk.
+	if rg := r.Header.Get("Range"); rg == "" || strings.HasPrefix(rg, "bytes=0-") {
+		h.record(r, domain.AuditEvent{
+			Action: audit.ActionExportDownload, TargetType: audit.TargetExport, TargetID: e.ID.String(),
+			Details: map[string]any{"pageId": e.RootPageID, "title": e.RootTitle, "format": string(e.Format),
+				"size": e.FileSize, "pages": e.PagesTotal},
+		})
+	}
 	w.Header().Set("Content-Type", e.Format.ContentType())
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	w.Header().Set("Cache-Control", "private, no-store")

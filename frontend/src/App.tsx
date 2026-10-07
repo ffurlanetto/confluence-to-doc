@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { isUnauthenticated } from './api/client';
 import { useMe } from './api/hooks';
 import { Layout } from './components/Layout';
+import { AdminAuditPage } from './pages/AdminAuditPage';
 import { ExportsPage } from './pages/ExportsPage';
 import { LoginPage } from './pages/LoginPage';
 import { NewExportPage } from './pages/NewExportPage';
@@ -27,6 +28,7 @@ export function App() {
         <Route path="/" element={<ExportsPage />} />
         <Route path="/new" element={<NewExportPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {me.data.isAdmin && <Route path="/admin/audit" element={<AdminAuditPage />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

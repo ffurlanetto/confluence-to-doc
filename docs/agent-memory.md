@@ -192,3 +192,18 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   `internal/converter` — it runs in CI even when it skips locally.
 - The mock stack (`make dev-mocks`) gives a full end-to-end run with no external service: PAT `dev-pat`,
   demo tree under “Documentation”.
+
+### Audit trail (`internal/audit`)
+
+- The log line is written **before** the database insert, and independently of it: the SIEM copy must be
+  complete even during a database outage. Do not reorder.
+- `Record` uses `context.WithoutCancel` for the insert: a client that disconnects right after downloading
+  must not erase the trace of the download.
+- A download served as several `Range` requests is recorded once, for the request starting at byte 0 (or
+  without `Range`).
+- `X-Forwarded-For` is read **right to left** and only when the peer is in `TRUSTED_PROXIES`: the leftmost
+  entries are written by the client and can be anything.
+- Audit pagination orders by `id`: ids are UUIDv7, time-ordered, which gives a stable cursor without a
+  composite one.
+- The `audit_events` trigger rejects `UPDATE` only. `DELETE` stays possible because the retention purge needs
+  it; the minimum `AUDIT_RETENTION` (30 days) is enforced by the configuration, not the database.

@@ -219,3 +219,60 @@ func TestMetricPrefixValidatedWithTelemetryDisabled(t *testing.T) {
 		t.Fatal("expected a validation error with telemetry disabled")
 	}
 }
+
+func TestAccessAndAuditDefaults(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.GroupsClaim != "groups" || len(cfg.OIDC.AdminGroups) != 0 {
+		t.Errorf("groups claim %q, admin groups %v", cfg.OIDC.GroupsClaim, cfg.OIDC.AdminGroups)
+	}
+	if cfg.AuditRetention != 365*24*time.Hour {
+		t.Errorf("audit retention = %v, want one year", cfg.AuditRetention)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("no proxy must be trusted by default, got %v", cfg.TrustedProxies)
+	}
+}
+
+func TestAccessAndAuditConfig(t *testing.T) {
+	env := baseEnv()
+	env["OIDC_GROUPS_CLAIM"] = "realm_access.roles"
+	env["OIDC_ADMIN_GROUPS"] = " Confluence Export Admins , 0b5c6f1e-guid ,"
+	env["AUDIT_RETENTION"] = "2160h"
+	env["TRUSTED_PROXIES"] = "10.0.0.0/8, 192.168.1.10, fd00::/8"
+	cfg, err := load(getter(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.OIDC.AdminGroups, "|"); got != "Confluence Export Admins|0b5c6f1e-guid" {
+		t.Errorf("admin groups = %q", got)
+	}
+	if cfg.OIDC.GroupsClaim != "realm_access.roles" || cfg.AuditRetention != 90*24*time.Hour {
+		t.Errorf("unexpected %q %v", cfg.OIDC.GroupsClaim, cfg.AuditRetention)
+	}
+	var got []string
+	for _, p := range cfg.TrustedProxies {
+		got = append(got, p.String())
+	}
+	if strings.Join(got, " ") != "10.0.0.0/8 192.168.1.10/32 fd00::/8" {
+		t.Errorf("trusted proxies = %v", got)
+	}
+}
+
+func TestAccessAndAuditValidation(t *testing.T) {
+	cases := map[string]map[string]string{
+		"AUDIT_RETENTION": {"AUDIT_RETENTION": "24h"},
+		"TRUSTED_PROXIES": {"TRUSTED_PROXIES": "10.0.0.0/33"},
+	}
+	for want, extra := range cases {
+		env := baseEnv()
+		for k, v := range extra {
+			env[k] = v
+		}
+		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%v: want error mentioning %s, got %v", extra, want, err)
+		}
+	}
+}

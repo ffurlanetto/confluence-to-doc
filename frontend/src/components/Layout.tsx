@@ -28,6 +28,7 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
           </NavLink>
           <NavLink to="/new">New export</NavLink>
           <NavLink to="/settings">Preferences</NavLink>
+          {me.isAdmin && <NavLink to="/admin/audit">Audit</NavLink>}
         </nav>
         <div className="user">
           <span title={me.email}>{me.name || me.email}</span>

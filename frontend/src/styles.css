@@ -347,3 +347,20 @@ table.exports {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.filters-submit {
+  display: flex;
+  align-items: flex-end;
+}
+
+table.audit code {
+  font-size: 0.8rem;
+  word-break: break-all;
+}

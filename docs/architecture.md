@@ -147,7 +147,10 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
   id, never returned by the API, and only ever sent to the configured Confluence origin (redirects to
   another host are blocked).
 - **Authorisation** — every export query filters on `user_id` (another user's export looks like a 404).
-  Confluence permissions are those of the user's PAT.
+  Confluence permissions are those of the user's PAT. The administration API (`/api/admin/*`) requires the
+  admin role, granted by the identity provider's groups at each sign-in (ADR 0008).
+- **Audit trail** — security-relevant actions are recorded in an append-only table and as structured log
+  lines for the SIEM (`internal/audit`, ADR 0008).
 - **Headers** — strict CSP (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, HSTS over HTTPS.
 - **Files** — storage keys are generated and validated server-side (no path traversal), written
   atomically, and served as `Content-Disposition: attachment`.

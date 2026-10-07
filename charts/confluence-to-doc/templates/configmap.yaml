@@ -19,6 +19,12 @@ data:
   OIDC_ISSUER_URL: {{ .Values.oidc.issuerUrl | quote }}
   OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}
   OIDC_SCOPES: {{ .Values.oidc.scopes | quote }}
+  OIDC_GROUPS_CLAIM: {{ .Values.oidc.groupsClaim | quote }}
+  OIDC_ADMIN_GROUPS: {{ join "," .Values.oidc.adminGroups | quote }}
+  AUDIT_RETENTION: {{ .Values.audit.retention | quote }}
+  {{- with .Values.trustedProxies }}
+  TRUSTED_PROXIES: {{ join "," . | quote }}
+  {{- end }}
 
   EXPORT_RETENTION: {{ .Values.export.retention | quote }}
   EXPORT_WORKER_CONCURRENCY: {{ .Values.export.workerConcurrency | quote }}
