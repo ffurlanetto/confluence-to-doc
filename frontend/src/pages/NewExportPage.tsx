@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { ApiError } from '../api/client';
 import { useCreateExport, usePreferences, useSearchPages } from '../api/hooks';
-import type { ExportFormat, PageSummary } from '../api/types';
+import type { Classification, ExportFormat, PageSummary } from '../api/types';
 import { PageTree } from '../components/PageTree';
 import { useDebounce } from '../lib/useDebounce';
 
@@ -61,6 +61,7 @@ function ExportForm({ page }: { page: PageSummary }) {
   const prefs = usePreferences();
   const [format, setFormat] = useState<ExportFormat | null>(null);
   const [includeChildren, setIncludeChildren] = useState(true);
+  const [classification, setClassification] = useState('');
   const create = useCreateExport();
   const navigate = useNavigate();
   const effectiveFormat = format ?? prefs.data?.defaultFormat ?? 'pdf';
@@ -68,7 +69,7 @@ function ExportForm({ page }: { page: PageSummary }) {
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     create.mutate(
-      { pageId: page.id, format: effectiveFormat, includeChildren },
+      { pageId: page.id, format: effectiveFormat, includeChildren, classification },
       { onSuccess: () => navigate('/') },
     );
   };
@@ -117,11 +118,59 @@ function ExportForm({ page }: { page: PageSummary }) {
         </details>
       )}
 
+      {prefs.data && prefs.data.classifications.length > 0 && (
+        <ClassificationField
+          levels={prefs.data.classifications}
+          fallback={prefs.data.defaultClassification}
+          value={classification}
+          onChange={setClassification}
+        />
+      )}
+      <p className="muted small">
+        Every page carries your name, the export date and its reference, so the document can be traced back to
+        this export.
+      </p>
+
       {create.isError && <p className="error">{errorMessage(create.error)}</p>}
       <button type="submit" className="button primary" disabled={create.isPending}>
         {create.isPending ? 'Submitting…' : 'Start export'}
       </button>
     </form>
+  );
+}
+
+function ClassificationField({
+  levels,
+  fallback,
+  value,
+  onChange,
+}: {
+  levels: Classification[];
+  fallback?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const chosen = levels.find((l) => l.label === (value || fallback));
+  return (
+    <div>
+      <label className="label" htmlFor="classification">
+        Classification
+      </label>
+      <select id="classification" className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{fallback ? `Default (${fallback})` : 'None'}</option>
+        {levels.map((l) => (
+          <option key={l.label} value={l.label}>
+            {l.label}
+            {l.watermark ? ' — watermarked' : ''}
+          </option>
+        ))}
+      </select>
+      {chosen?.watermark && (
+        <p className="muted small">
+          “{chosen.label.toUpperCase()}” will be printed diagonally across every page.
+        </p>
+      )}
+    </div>
   );
 }
 

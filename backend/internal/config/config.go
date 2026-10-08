@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 )
 
 // Role selects which components a process runs, so API and workers can be
@@ -129,10 +131,20 @@ type ExportConfig struct {
 	// WordTemplatePath points at a company Word template (.docx/.dotx)
 	// applied to every generated document. Empty means default styling.
 	WordTemplatePath string
-	// Classification is written to the subject property of every generated
-	// document, for the document management systems that sort on it.
+	// Classification is the default classification: written to the subject
+	// property of every document whose requester chose none.
 	Classification string
+	// Classifications are the levels a user may pick when exporting; the
+	// marked ones put a watermark on every page. Empty disables the choice.
+	Classifications []domain.Classification
 }
+
+// defaultClassifications is a common four-level scheme; most companies
+// replace it with their own through DOCUMENT_CLASSIFICATIONS.
+const defaultClassifications = "Public, Internal, Confidential:watermark, Restricted:watermark"
+
+// maxClassificationLabel keeps the label printable in a footer and a watermark.
+const maxClassificationLabel = 40
 
 // minAuditRetention keeps an investigation possible: a security incident is
 // often noticed weeks after the fact.
@@ -193,6 +205,7 @@ func load(getenv func(string) string) (*Config, error) {
 			ConfluenceWorkers: e.int("CONFLUENCE_FETCH_CONCURRENCY", 4),
 			WordTemplatePath:  e.str("WORD_TEMPLATE_PATH", ""),
 			Classification:    e.str("DOCUMENT_CLASSIFICATION", ""),
+			Classifications:   e.classifications("DOCUMENT_CLASSIFICATIONS", defaultClassifications),
 		},
 	}
 	cfg.Telemetry = TelemetryConfig{
@@ -371,6 +384,38 @@ func (e *envReader) csv(key string) []string {
 		if item = strings.TrimSpace(item); item != "" {
 			out = append(out, item)
 		}
+	}
+	return out
+}
+
+// classifications reads "Label[:watermark], ..."; "none" disables the choice.
+func (e *envReader) classifications(key, def string) []domain.Classification {
+	raw := e.str(key, def)
+	if strings.EqualFold(raw, "none") {
+		return nil
+	}
+	var out []domain.Classification
+	seen := map[string]bool{}
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		label, flag, hasFlag := strings.Cut(item, ":")
+		label, flag = strings.TrimSpace(label), strings.TrimSpace(flag)
+		switch {
+		case label == "" || len(label) > maxClassificationLabel:
+			e.errs = append(e.errs, fmt.Errorf("%s: label %q must be 1 to %d characters", key, label, maxClassificationLabel))
+			continue
+		case hasFlag && !strings.EqualFold(flag, "watermark"):
+			e.errs = append(e.errs, fmt.Errorf("%s: unknown option %q for %q (only \"watermark\")", key, flag, label))
+			continue
+		case seen[strings.ToLower(label)]:
+			e.errs = append(e.errs, fmt.Errorf("%s: %q is listed twice", key, label))
+			continue
+		}
+		seen[strings.ToLower(label)] = true
+		out = append(out, domain.Classification{Label: label, Watermark: hasFlag})
 	}
 	return out
 }

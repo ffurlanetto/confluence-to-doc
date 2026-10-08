@@ -71,6 +71,10 @@ type Deps struct {
 	// DocumentTemplate is the company Word template file name, empty when
 	// documents use the built-in styling.
 	DocumentTemplate string
+	// Classifications are the levels offered when exporting (empty: no
+	// choice); DefaultClassification applies when the user picks none.
+	Classifications       []domain.Classification
+	DefaultClassification string
 }
 
 func NewRouter(d Deps) http.Handler {

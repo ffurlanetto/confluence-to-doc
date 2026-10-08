@@ -19,7 +19,7 @@ import (
 // Converter converts a self-contained HTML document into the target format
 // and writes the result to dst.
 type Converter interface {
-	Convert(ctx context.Context, html []byte, format domain.Format, dst io.Writer) error
+	Convert(ctx context.Context, html []byte, format domain.Format, marking docx.Marking, dst io.Writer) error
 }
 
 // LibreOffice converts documents with a headless `soffice` process.
@@ -42,7 +42,9 @@ var filters = map[domain.Format]string{
 	domain.FormatDOCX: "docx:MS Word 2007 XML",
 }
 
-func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.Format, dst io.Writer) error {
+// Convert produces the document; marking is stamped on every page of both
+// formats (see docx.Mark).
+func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.Format, marking docx.Marking, dst io.Writer) error {
 	if _, ok := filters[format]; !ok {
 		return domain.ErrInvalidFormat
 	}
@@ -68,6 +70,9 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 	}
 	document, err := l.finish(generated)
 	if err != nil {
+		return err
+	}
+	if document, err = docx.Mark(document, marking); err != nil {
 		return err
 	}
 	if format == domain.FormatDOCX {

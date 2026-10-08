@@ -59,6 +59,17 @@ func (s *Store) UpsertUser(ctx context.Context, issuer, subject, email, name str
 	return u, err
 }
 
+// GetUser returns a user by id.
+func (s *Store) GetUser(ctx context.Context, id uuid.UUID) (*domain.User, error) {
+	u := &domain.User{}
+	err := s.pool.QueryRow(ctx, `SELECT id, issuer, subject, email, name, is_admin, created_at FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	return u, err
+}
+
 // RecordLogin stores the outcome of a successful login: the admin flag the
 // identity provider granted this time, and the login time.
 func (s *Store) RecordLogin(ctx context.Context, userID uuid.UUID, isAdmin bool) error {
@@ -143,14 +154,14 @@ func (s *Store) SetDefaultFormat(ctx context.Context, userID uuid.UUID, f domain
 
 // -------------------------------------------------------------- exports
 
-const exportColumns = `id, user_id, root_page_id, root_title, format, include_children, status,
+const exportColumns = `id, user_id, root_page_id, root_title, format, include_children, classification, status,
 	attempts, max_attempts, error, pages_done, pages_total, file_key, file_size,
 	created_at, started_at, finished_at, expires_at`
 
 func scanExport(row pgx.Row) (*domain.Export, error) {
 	e := &domain.Export{}
 	var format, status string
-	err := row.Scan(&e.ID, &e.UserID, &e.RootPageID, &e.RootTitle, &format, &e.IncludeChildren, &status,
+	err := row.Scan(&e.ID, &e.UserID, &e.RootPageID, &e.RootTitle, &format, &e.IncludeChildren, &e.Classification, &status,
 		&e.Attempts, &e.MaxAttempts, &e.Error, &e.PagesDone, &e.PagesTotal, &e.FileKey, &e.FileSize,
 		&e.CreatedAt, &e.StartedAt, &e.FinishedAt, &e.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -180,10 +191,10 @@ func (s *Store) CreateExport(ctx context.Context, e *domain.Export, maxActive in
 			return domain.ErrTooManyActive
 		}
 		row := tx.QueryRow(ctx, `
-			INSERT INTO exports (id, user_id, root_page_id, root_title, format, include_children, status, max_attempts)
-			VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7)
+			INSERT INTO exports (id, user_id, root_page_id, root_title, format, include_children, classification, status, max_attempts)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8)
 			RETURNING `+exportColumns,
-			e.ID, e.UserID, e.RootPageID, e.RootTitle, string(e.Format), e.IncludeChildren, e.MaxAttempts)
+			e.ID, e.UserID, e.RootPageID, e.RootTitle, string(e.Format), e.IncludeChildren, e.Classification, e.MaxAttempts)
 		created, err := scanExport(row)
 		if err != nil {
 			return err

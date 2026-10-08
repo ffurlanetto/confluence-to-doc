@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence/fake"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/exporter"
@@ -29,15 +32,15 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/testutil"
 )
 
-// htmlConverter "converts" by copying the HTML, which lets tests assert on
-// the content without requiring LibreOffice.
+// htmlConverter "converts" by copying the HTML, followed by the marking it
+// was asked to stamp, which lets tests assert on both without LibreOffice.
 type htmlConverter struct{ fail error }
 
-func (c htmlConverter) Convert(_ context.Context, html []byte, _ domain.Format, dst io.Writer) error {
+func (c htmlConverter) Convert(_ context.Context, html []byte, _ domain.Format, m docx.Marking, dst io.Writer) error {
 	if c.fail != nil {
 		return c.fail
 	}
-	_, err := dst.Write(html)
+	_, err := fmt.Fprintf(dst, "%s\nFOOTER: %s\nWATERMARK: %s\n", html, m.Footer, m.Watermark)
 	return err
 }
 
@@ -74,11 +77,13 @@ func newEnvWithBlobs(t *testing.T, conv htmlConverter, blobs storage.BlobStore) 
 
 	sealer, _ := crypto.NewSealer(bytes.Repeat([]byte{1}, 32))
 	acc := account.NewService(s, sealer, u, 5*time.Second)
-	user, _ := s.UpsertUser(ctx, "iss", uuid.NewString(), "", "")
+	user, _ := s.UpsertUser(ctx, "iss", uuid.NewString(), "owner@example.com", "Olive Owner")
 
 	pool := export.NewPool(s, acc, conv, blobs, export.WorkerConfig{
 		Concurrency: 1, PollInterval: 20 * time.Millisecond, JobTimeout: time.Minute, Lease: 3 * time.Second,
 		Retention: 48 * time.Hour, MaxPages: 10, MaxImageBytes: 1 << 20, ConfluenceWorkers: 2,
+		Classification:  "Internal",
+		Classifications: []domain.Classification{{Label: "Internal"}, {Label: "Confidential", Watermark: true}},
 	})
 	svc := export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 5}, pool.Notify)
 	return &env{store: s, blobs: blobs, svc: svc, pool: pool, user: user, fake: f, account: acc}
@@ -298,5 +303,49 @@ func TestOpenReportsMissingFileAsNotFound(t *testing.T) {
 	_ = e.store.CompleteExport(ctx, claimed.ID, "w", job.ID.String()+".pdf", 3, 1, time.Hour)
 	if _, _, err := e.svc.Open(ctx, job.ID, e.user.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
+func TestEveryDocumentIsMarked(t *testing.T) {
+	e := newEnv(t, htmlConverter{})
+	ctx := context.Background()
+	if _, err := e.account.SetPAT(ctx, e.user.ID, "pat"); err != nil {
+		t.Fatal(err)
+	}
+	runPool(t, e.pool)
+
+	read := func(job *domain.Export) string {
+		t.Helper()
+		done := e.waitFor(t, job.ID, domain.StatusSucceeded, domain.StatusFailed)
+		if done.Status != domain.StatusSucceeded {
+			t.Fatalf("export failed: %s", done.Error)
+		}
+		_, f, err := e.svc.Open(context.Background(), job.ID, e.user.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		b, _ := io.ReadAll(f)
+		return string(b)
+	}
+
+	confidential, _ := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "1", Format: domain.FormatPDF, Classification: "Confidential"})
+	doc := read(confidential)
+	footer := regexp.MustCompile(`FOOTER: Exported by Olive Owner \(owner@example\.com\) on \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC · Confidential · Ref\. ` + confidential.ID.String())
+	if !footer.MatchString(doc) || !strings.Contains(doc, "WATERMARK: CONFIDENTIAL\n") {
+		t.Errorf("confidential export not marked as such:\n%s", doc[strings.Index(doc, "FOOTER"):])
+	}
+	for _, want := range []string{`<meta name="classification" content="Confidential">`, `content="` + confidential.ID.String() + `"`, `content="owner@example.com"`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("document properties miss %s", want)
+		}
+	}
+
+	// Without a choice, the configured default applies — and it carries no
+	// watermark.
+	plain, _ := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "1", Format: domain.FormatPDF})
+	doc = read(plain)
+	if !strings.Contains(doc, " · Internal · Ref. "+plain.ID.String()) || !strings.Contains(doc, "WATERMARK: \n") {
+		t.Errorf("default classification not applied:\n%s", doc[strings.Index(doc, "FOOTER"):])
 	}
 }

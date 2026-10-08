@@ -79,6 +79,10 @@ A minimal checklist: page setup ✅, header ✅, `Normal` style ✅, `Heading 1`
   on open, which is what fills in the page numbers.
 - **Document properties** (title, author, description, keywords, classification, and custom properties
   naming the Confluence source) travel with the document into both the DOCX and the PDF.
+- **Headers and footers are extended, never replaced.** The traceability line ("Exported by … · Ref. …") is
+  added at the end of each footer, and the watermark of a sensitive classification as a shape in each
+  header (see [configuration](configuration.md#document-marking)). Leave a little room under the footer
+  for one more line in small print.
 - Tables keep their visible borders from the export, not from a table style.
 - **Tables are laid out again to fit the printable width.** The converter sizes columns from their content
   and readily overflows even its own page — a nine-column Confluence table came out half as wide again as

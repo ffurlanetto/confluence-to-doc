@@ -46,7 +46,8 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `EXPORT_STORAGE_DIR`           | `./data/exports`        | Directory of generated documents in local storage (ignored when S3 is enabled) |
 | `SOFFICE_PATH`                 | `soffice`               | LibreOffice binary                                              |
 | `WORD_TEMPLATE_PATH`           | _(empty)_               | Company Word template applied to every document                 |
-| `DOCUMENT_CLASSIFICATION`      | _(empty)_               | Written to the subject property of every document (Word and PDF) |
+| `DOCUMENT_CLASSIFICATION`      | _(empty)_               | Default classification, used when the requester picks none: subject property and page footer |
+| `DOCUMENT_CLASSIFICATIONS`     | `Public, Internal, Confidential:watermark, Restricted:watermark` | Levels offered when exporting; `:watermark` sets the label diagonally across every page. `none` removes the choice |
 
 ## Telemetry (OpenTelemetry)
 
@@ -208,6 +209,29 @@ removing someone from the group takes effect at their next login (at most `SESSI
 | Entra ID | Prefer **app roles** (`OIDC_GROUPS_CLAIM=roles`, `OIDC_ADMIN_GROUPS=<role value>`): group claims carry object ids and are left out above 200 groups (“overage”) |
 | Okta     | Add a `groups` claim to the ID token with a group filter |
 | Others   | Any claim holding a string or a list of strings; namespaced claims such as `https://example.com/groups` work as-is |
+
+## Document marking
+
+Every page of every document — Word and PDF alike — ends with a traceability line:
+
+> Exported by Ann Martin (ann.martin@example.com) on 2026-10-08 09:14 UTC · Confidential · Ref. 0199c0de-…
+
+The reference is the export id, which leads to the export's events in the audit trail. The same id and the
+requester's email are also written to the document properties (`Export ID`, `Exported by`).
+
+When exporting, users pick a classification from `DOCUMENT_CLASSIFICATIONS`, or none — in which case
+`DOCUMENT_CLASSIFICATION` applies, if set. Levels marked `:watermark` add the label, in capitals, diagonally
+across every page, as a Word watermark (*Design › Watermark* shows it, and it can be removed there: it is a
+deterrent and a reminder, not a protection). Labels are free text, up to 40 characters, without commas or
+colons:
+
+```
+DOCUMENT_CLASSIFICATIONS=C0 – Public, C1 – Internal, C2 – Confidential:watermark, C3 – Secret:watermark
+```
+
+With a company Word template, the line is appended to the template's own footers and the watermark to its
+headers; nothing of the template is replaced. A first page with a header or footer of its own gets the
+marking too.
 
 ## Audit trail
 

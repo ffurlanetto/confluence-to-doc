@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,9 +42,12 @@ type WorkerConfig struct {
 	// UseTemplateStyles tells the renderer to leave typography to the
 	// company Word template instead of styling the document itself.
 	UseTemplateStyles bool
-	// Classification is written to every document's subject property, for the
-	// document management systems that sort on it. Empty leaves it unset.
+	// Classification is the default classification, used when the requester
+	// chose none: written to the subject property and the page footer.
 	Classification string
+	// Classifications are the configured levels; the marked ones put a
+	// watermark on every page.
+	Classifications []domain.Classification
 	// ShutdownGrace is how long in-flight jobs may run after shutdown starts
 	// before being released back to the queue.
 	ShutdownGrace time.Duration
@@ -289,6 +293,14 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	if err != nil {
 		return "", 0, 0, err
 	}
+	requester, err := p.repo.GetUser(ctx, job.UserID)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("loading the requester: %w", err)
+	}
+	classification := job.Classification
+	if classification == "" {
+		classification = p.cfg.Classification
+	}
 	crawlCtx, crawlSpan := observability.Start(ctx, "confluence.crawl",
 		observability.AttrPageID.String(job.RootPageID))
 	root, err := exporter.BuildTree(crawlCtx, client, job.RootPageID, exporter.TreeOptions{
@@ -316,8 +328,8 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 		Author:            p.author(ctx, client),
 		Description:       description(root, generatedAt),
 		Keywords:          keywords(root),
-		Classification:    p.cfg.Classification,
-		Properties:        properties(root, pages, generatedAt),
+		Classification:    classification,
+		Properties:        append(properties(root, pages, generatedAt), traceability(job, requester)...),
 	}, exporter.ConfluenceAssets{Client: client, MaxImageBytes: p.cfg.MaxImageBytes})
 	if err != nil {
 		observability.End(renderSpan, err)
@@ -333,7 +345,7 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	pr, pw := io.Pipe()
 	convErr := make(chan error, 1)
 	go func() {
-		err := p.converter.Convert(ctx, html, job.Format, pw)
+		err := p.converter.Convert(ctx, html, job.Format, p.marking(job, requester, classification, generatedAt), pw)
 		pw.CloseWithError(err)
 		convErr <- err
 	}()
@@ -415,6 +427,50 @@ func description(root *exporter.Node, at time.Time) string {
 		where += " (" + root.Page.SpaceName + ")"
 	}
 	return "Exported from Confluence: " + where + ", " + at.Format(time.RFC3339)
+}
+
+// --- Traceability ----------------------------------------------------------------
+//
+// A downloaded document is forwarded, printed and filed beyond the reach of
+// Confluence permissions. Every page therefore says who exported it, when and
+// under which classification, with the export id that leads back to the audit
+// trail; sensitive levels add a watermark.
+
+// marking is what docx.Mark stamps on every page.
+func (p *Pool) marking(job *domain.Export, requester *domain.User, classification string, at time.Time) docx.Marking {
+	parts := []string{"Exported by " + displayName(requester) + " on " + at.UTC().Format("2006-01-02 15:04") + " UTC"}
+	if classification != "" {
+		parts = append(parts, classification)
+	}
+	parts = append(parts, "Ref. "+job.ID.String())
+	m := docx.Marking{Footer: strings.Join(parts, " · ")}
+	for _, c := range p.cfg.Classifications {
+		if c.Watermark && strings.EqualFold(c.Label, classification) {
+			m.Watermark = strings.ToUpper(c.Label)
+		}
+	}
+	return m
+}
+
+// traceability are the custom properties naming the export and its requester,
+// for document management systems and for whoever finds the file later.
+func traceability(job *domain.Export, requester *domain.User) []exporter.Property {
+	return []exporter.Property{
+		{Name: "Export ID", Value: job.ID.String()},
+		{Name: "Exported by", Value: requester.Email},
+	}
+}
+
+func displayName(u *domain.User) string {
+	switch {
+	case u.Name != "" && u.Email != "":
+		return u.Name + " (" + u.Email + ")"
+	case u.Name != "":
+		return u.Name
+	case u.Email != "":
+		return u.Email
+	}
+	return u.Subject
 }
 
 func keywords(root *exporter.Node) []string {

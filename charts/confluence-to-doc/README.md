@@ -68,6 +68,12 @@ administration pages. Set `trustedProxies` to the address range of the ingress c
 trail records the client address rather than the controller's; `audit.retention` bounds how long events
 stay in the database. See [docs/configuration.md](../../docs/configuration.md#audit-trail).
 
+### Classifications
+
+`documents.classifications` lists the levels users choose from when exporting (`:watermark` adds a diagonal
+watermark), `documents.defaultClassification` the one applied when they pick none. Every page carries a
+traceability footer either way. See [docs/configuration.md](../../docs/configuration.md#document-marking).
+
 ### Storage
 
 `storage.type: s3` is the default and the one that fits Kubernetes: API and worker pods then share nothing.

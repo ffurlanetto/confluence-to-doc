@@ -276,3 +276,43 @@ func TestAccessAndAuditValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifications(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range cfg.Export.Classifications {
+		label := c.Label
+		if c.Watermark {
+			label += "*"
+		}
+		got = append(got, label)
+	}
+	if strings.Join(got, ",") != "Public,Internal,Confidential*,Restricted*" {
+		t.Errorf("default classifications = %v", got)
+	}
+
+	env := baseEnv()
+	env["DOCUMENT_CLASSIFICATIONS"] = " C0 – Public , C3 – Secret : WATERMARK "
+	cfg, err = load(getter(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Export.Classifications) != 2 || cfg.Export.Classifications[1].Label != "C3 – Secret" || !cfg.Export.Classifications[1].Watermark {
+		t.Errorf("custom classifications = %+v", cfg.Export.Classifications)
+	}
+
+	env["DOCUMENT_CLASSIFICATIONS"] = "none"
+	if cfg, _ = load(getter(env)); len(cfg.Export.Classifications) != 0 {
+		t.Errorf("none must disable the choice: %+v", cfg.Export.Classifications)
+	}
+
+	for _, bad := range []string{"Internal, internal", "Secret:stamp", ":watermark", strings.Repeat("x", 41)} {
+		env["DOCUMENT_CLASSIFICATIONS"] = bad
+		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), "DOCUMENT_CLASSIFICATIONS") {
+			t.Errorf("%q: want an error, got %v", bad, err)
+		}
+	}
+}
