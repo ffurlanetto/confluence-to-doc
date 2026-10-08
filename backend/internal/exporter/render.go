@@ -209,6 +209,24 @@ var droppedElements = map[atom.Atom]bool{
 	atom.Embed: true, atom.Form: true, atom.Button: true,
 	atom.Noscript: true, atom.Link: true, atom.Meta: true, atom.Select: true,
 	atom.Textarea: true,
+	// Elements whose only purpose is to load something else. LibreOffice
+	// fetches remote resources while importing HTML, so anything that names a
+	// URL to load is a request from the worker's network, chosen by whoever
+	// wrote the page.
+	atom.Video: true, atom.Audio: true, atom.Source: true, atom.Track: true,
+	atom.Frame: true, atom.Frameset: true, atom.Applet: true, atom.Base: true,
+	atom.Svg: true, atom.Template: true,
+}
+
+// loadingAttributes name a resource to load. src is handled by the image
+// inlining (only data: URIs survive it) and href is kept on links, which are
+// not followed during conversion; every other attribute that makes the
+// converter fetch something is removed.
+var loadingAttributes = map[string]bool{
+	"srcset": true, "background": true, "poster": true, "lowsrc": true, "dynsrc": true,
+	"longdesc": true, "codebase": true, "archive": true, "data": true, "ping": true,
+	"formaction": true, "action": true, "xlink:href": true, "usemap": true, "cite": true,
+	"profile": true, "manifest": true, "classid": true,
 }
 
 // checkboxText renders a task-list checkbox as the state it records.
@@ -323,15 +341,45 @@ func stripEventHandlers(n *nethtml.Node) {
 	attrs := n.Attr[:0]
 	for _, a := range n.Attr {
 		key := strings.ToLower(a.Key)
-		if strings.HasPrefix(key, "on") || key == "srcset" {
-			continue
+		if a.Namespace != "" {
+			key = strings.ToLower(a.Namespace) + ":" + key
 		}
-		if (key == "href" || key == "src") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.Val)), "javascript:") {
+		switch {
+		case strings.HasPrefix(key, "on"), loadingAttributes[key]:
 			continue
+		case (key == "href" || key == "src") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.Val)), "javascript:"):
+			continue
+		case key == "href" && n.DataAtom != atom.A && n.DataAtom != atom.Area:
+			continue // only links may name another document
+		case key == "src" && n.DataAtom != atom.Img:
+			continue // images are inlined; nothing else may load a source
+		case key == "style":
+			if a.Val = withoutRemoteReferences(a.Val); a.Val == "" {
+				continue
+			}
 		}
 		attrs = append(attrs, a)
 	}
 	n.Attr = attrs
+}
+
+// withoutRemoteReferences drops the CSS declarations of an inline style that
+// could load something: url(), @import, and the legacy expression() and
+// behavior hooks.
+func withoutRemoteReferences(style string) string {
+	var kept []string
+	for _, decl := range strings.Split(style, ";") {
+		lower := strings.ToLower(decl)
+		if strings.Contains(lower, "url(") || strings.Contains(lower, "@import") ||
+			strings.Contains(lower, "expression(") || strings.Contains(lower, "behavior") ||
+			strings.Contains(lower, "image-set(") || strings.Contains(lower, "\\") {
+			continue
+		}
+		if strings.TrimSpace(decl) != "" {
+			kept = append(kept, strings.TrimSpace(decl))
+		}
+	}
+	return strings.Join(kept, "; ")
 }
 
 func getAttr(n *nethtml.Node, key string) (string, int) {

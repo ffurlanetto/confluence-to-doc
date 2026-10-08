@@ -21,7 +21,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}"
 # ---- Runtime --------------------------------------------------------------
 # LibreOffice (Writer only, no GUI) performs the HTML -> PDF/DOCX conversion.
 FROM debian:bookworm-slim AS runtime
+# The upgrade brings the security fixes published since the base image was
+# built; CI fails on any fixable vulnerability left in the image.
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends \
       libreoffice-writer-nogui fonts-liberation fonts-dejavu-core ca-certificates tini \
  && rm -rf /var/lib/apt/lists/* \

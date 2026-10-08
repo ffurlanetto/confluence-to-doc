@@ -167,6 +167,25 @@ jobs:
           echo "published platforms: $platforms"
           test "$platforms" = "linux/amd64,linux/arm64"
 
+      # The SBOM lists every package in the image (Debian, LibreOffice, Go
+      # modules), so a vulnerability announced later can be matched against
+      # what was actually shipped. It is attested and pushed next to the image.
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.manifest.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          artifact-name: sbom.spdx.json
+
+      - name: Attest the SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+
       - name: Attest the build provenance
         uses: actions/attest-build-provenance@v4
         with:

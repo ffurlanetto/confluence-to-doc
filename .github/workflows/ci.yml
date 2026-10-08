@@ -107,7 +107,20 @@ jobs:
           context: .
           target: runtime
           push: false
+          load: true
           tags: confluence-to-doc:ci
           build-args: VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # LibreOffice parses content written by any Confluence author: the image
+      # must not ship a known, fixable vulnerability. Go modules are checked by
+      # govulncheck already; this covers the Debian packages and the binary.
+      # Pinned to a commit: the scanner sees the image and runs with the job's
+      # token, so its code is not left to a tag that can be moved.
+      - name: Scan the image for known vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: confluence-to-doc:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

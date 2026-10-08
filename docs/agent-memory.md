@@ -223,3 +223,14 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   them as well, or the sideways pages lose the marking.
 - The watermark is drawn, not written: `pdftotext` does not see it. Tests check the footer text in the PDF
   and the watermark in the DOCX headers.
+
+### Conversion isolation (ADR 0010)
+
+- **LibreOffice fetches remote resources while importing HTML** — `<link rel=stylesheet>`, `<img src>`,
+  `background`… It sends `OPTIONS`/`HEAD`/`GET` with WebDAV-ish probing. `TestLibreOfficeReachesNoNetwork`
+  catches it with a local HTTP server.
+- Setting the proxy in the profile (`registrymodifications.xcu`, `ooInetProxyType=2`) does **not** stop
+  it in 24.2. The `http_proxy`/`https_proxy` environment variables pointed at `127.0.0.1:9` **do**, and the
+  conversion still succeeds. `isolatedEnv` also drops the server's own proxy variables and `no_proxy`.
+- `unshare --net` would be stronger but needs user namespaces, denied by the `RuntimeDefault` seccomp
+  profile the chart applies.

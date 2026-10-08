@@ -1,0 +1,49 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+Default deny, then exactly the traffic the application needs. The API pods
+accept requests from the ingress controller only; worker pods accept nothing.
+Both may resolve names and reach the destinations listed in
+networkPolicy.egress — Confluence, PostgreSQL, the identity provider, object
+storage, the telemetry collector — and nowhere else, so a document that tried
+to make LibreOffice fetch something would find no route out either.
+*/ -}}
+{{- range $component := list "api" "worker" }}
+{{- if or (eq $component "api") $.Values.worker.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "confluence-to-doc.fullname" $ }}-{{ $component }}
+  labels: {{- include "confluence-to-doc.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "confluence-to-doc.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $component }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- if and (eq $component "api") $.Values.networkPolicy.ingressFrom }}
+    - from: {{- toYaml $.Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - port: 8080
+          protocol: TCP
+    {{- end }}
+  egress:
+    {{- if $.Values.networkPolicy.allowDNS }}
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
+    {{- with $.Values.networkPolicy.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
