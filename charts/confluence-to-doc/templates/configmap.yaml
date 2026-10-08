@@ -35,6 +35,10 @@ data:
   EXPORT_MAX_IMAGE_BYTES: {{ .Values.export.maxImageBytes | quote }}
   EXPORT_POLL_INTERVAL: {{ .Values.export.pollInterval | quote }}
   EXPORT_JANITOR_INTERVAL: {{ .Values.export.janitorInterval | quote }}
+  DOCUMENT_CLASSIFICATIONS: {{ .Values.documents.classifications | quote }}
+  {{- with .Values.documents.defaultClassification }}
+  DOCUMENT_CLASSIFICATION: {{ . | quote }}
+  {{- end }}
   {{- if eq .Values.storage.type "filesystem" }}
   EXPORT_STORAGE_DIR: {{ .Values.storage.filesystem.path | quote }}
   {{- else }}

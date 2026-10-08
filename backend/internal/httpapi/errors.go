@@ -59,6 +59,8 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusGone, "expired", "The document has expired and is no longer available.")
 	case errors.Is(err, domain.ErrInvalidFormat):
 		writeError(w, r, http.StatusBadRequest, "invalid_format", "Invalid format (expected pdf or docx).")
+	case errors.Is(err, domain.ErrInvalidClassification):
+		writeError(w, r, http.StatusBadRequest, "invalid_classification", "Unknown classification.")
 	case errors.Is(err, domain.ErrInvalidPageID):
 		writeError(w, r, http.StatusBadRequest, "invalid_page", "Invalid page identifier.")
 	default:

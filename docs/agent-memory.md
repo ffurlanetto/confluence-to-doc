@@ -207,3 +207,19 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   composite one.
 - The `audit_events` trigger rejects `UPDATE` only. `DELETE` stays possible because the retention purge needs
   it; the minimum `AUDIT_RETENTION` (30 days) is enforced by the configuration, not the database.
+
+### Document marking (`internal/docx/marking.go`)
+
+- **LibreOffice recognises Word's watermark** — a VML `v:shape` with `id="PowerPlusWaterMarkObject"` and a
+  `v:textpath` in a header part — and draws it in the PDF. DrawingML text boxes would need far more XML for
+  the same result. The header root must declare the `v`, `o` and `w10` namespaces; template headers usually
+  do not, so `appendToHdrFtr` adds them.
+- LibreOffice's own DOCX writes `w:footer="0"` in `w:pgMar`: a footer created there sits on the paper's edge.
+  `clearOfTheEdge` moves it to 6 mm, only for sections that get our footer part.
+- With `<w:titlePg/>` a section's first page uses the `first` header/footer, and with
+  `<w:evenAndOddHeaders/>` in `settings.xml` even pages use `even` ones. A missing variant shows *nothing*
+  on those pages, so `Mark` adds references for them too.
+- Header and footer references must come **first** in `w:sectPr`; landscape sections (inside `w:pPr`) need
+  them as well, or the sideways pages lose the marking.
+- The watermark is drawn, not written: `pdftotext` does not see it. Tests check the footer text in the PDF
+  and the watermark in the DOCX headers.

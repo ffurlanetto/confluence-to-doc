@@ -97,7 +97,8 @@ Queue robustness:
 - sanitisation: scripts, iframes, forms and event handlers are removed.
 
 Both formats come out of the **same** DOCX: the HTML is converted to DOCX, the template (when configured)
-is applied, and a PDF is produced from that document rather than from the HTML. Word and PDF are then one
+is applied, every page is marked — a traceability footer, and a watermark for sensitive classifications
+(`docx.Mark`, ADR 0009) — and a PDF is produced from that document rather than from the HTML. Word and PDF are then one
 layout rather than two independent renderings of the same source.
 
 The table of contents is written as paragraphs whose class carries the level; the DOCX step recognises

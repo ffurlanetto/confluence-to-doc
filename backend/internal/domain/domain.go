@@ -10,14 +10,15 @@ import (
 )
 
 var (
-	ErrNotFound           = errors.New("not found")
-	ErrTooManyActive      = errors.New("too many active exports")
-	ErrPATMissing         = errors.New("confluence personal access token not configured")
-	ErrExportNotReady     = errors.New("export not ready")
-	ErrExportExpired      = errors.New("export expired")
-	ErrInvalidFormat      = errors.New("invalid export format")
-	ErrInvalidPageID      = errors.New("invalid page id")
-	ErrExportNotDeletable = errors.New("export is being processed and cannot be deleted")
+	ErrNotFound              = errors.New("not found")
+	ErrTooManyActive         = errors.New("too many active exports")
+	ErrPATMissing            = errors.New("confluence personal access token not configured")
+	ErrExportNotReady        = errors.New("export not ready")
+	ErrExportExpired         = errors.New("export expired")
+	ErrInvalidFormat         = errors.New("invalid export format")
+	ErrInvalidPageID         = errors.New("invalid page id")
+	ErrExportNotDeletable    = errors.New("export is being processed and cannot be deleted")
+	ErrInvalidClassification = errors.New("unknown document classification")
 )
 
 type User struct {
@@ -73,6 +74,13 @@ func (f Format) ContentType() string {
 	return "application/pdf"
 }
 
+// Classification is a document sensitivity level offered when exporting.
+type Classification struct {
+	Label string
+	// Watermark sets the label diagonally across every page.
+	Watermark bool
+}
+
 type ExportStatus string
 
 const (
@@ -93,18 +101,21 @@ type Export struct {
 	RootTitle       string
 	Format          Format
 	IncludeChildren bool
-	Status          ExportStatus
-	Attempts        int
-	MaxAttempts     int
-	Error           string
-	PagesDone       int
-	PagesTotal      int
-	FileKey         string
-	FileSize        int64
-	CreatedAt       time.Time
-	StartedAt       *time.Time
-	FinishedAt      *time.Time
-	ExpiresAt       *time.Time
+	// Classification is the label chosen when the export was requested,
+	// empty when none was.
+	Classification string
+	Status         ExportStatus
+	Attempts       int
+	MaxAttempts    int
+	Error          string
+	PagesDone      int
+	PagesTotal     int
+	FileKey        string
+	FileSize       int64
+	CreatedAt      time.Time
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	ExpiresAt      *time.Time
 }
 
 // Downloadable reports whether the file can be served at instant now.

@@ -129,6 +129,7 @@ func run() error {
 			ConfluenceWorkers: cfg.Export.ConfluenceWorkers,
 			UseTemplateStyles: template != nil,
 			Classification:    cfg.Export.Classification,
+			Classifications:   cfg.Export.Classifications,
 			ShutdownGrace:     20 * time.Second,
 			Audit:             auditor,
 		})
@@ -152,18 +153,20 @@ func run() error {
 			return err
 		}
 		router := httpapi.NewRouter(httpapi.Deps{
-			Auth:             authenticator,
-			Accounts:         accounts,
-			Exports:          export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
-			Audit:            auditor,
-			AuditLog:         db,
-			TrustedProxies:   cfg.TrustedProxies,
-			Ready:            db.Ping,
-			PublicURL:        cfg.PublicURL,
-			StaticDir:        cfg.StaticDir,
-			Retention:        cfg.Export.Retention,
-			MaxPages:         cfg.Export.MaxPages,
-			DocumentTemplate: templateName(template),
+			Auth:                  authenticator,
+			Accounts:              accounts,
+			Exports:               export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
+			Audit:                 auditor,
+			AuditLog:              db,
+			TrustedProxies:        cfg.TrustedProxies,
+			Ready:                 db.Ping,
+			PublicURL:             cfg.PublicURL,
+			StaticDir:             cfg.StaticDir,
+			Retention:             cfg.Export.Retention,
+			MaxPages:              cfg.Export.MaxPages,
+			DocumentTemplate:      templateName(template),
+			Classifications:       cfg.Export.Classifications,
+			DefaultClassification: cfg.Export.Classification,
 		})
 		servers = append(servers, newServer(cfg.HTTPAddr, router))
 	} else {

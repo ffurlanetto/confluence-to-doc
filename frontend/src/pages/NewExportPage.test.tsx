@@ -46,9 +46,49 @@ describe('NewExportPage', () => {
     expect(await screen.findByRole('radio', { name: 'Word (.docx)' })).toBeChecked();
 
     await user.click(screen.getByRole('radio', { name: 'PDF' }));
+    // No classification chosen: the configured default is announced.
+    expect(screen.getByRole('option', { name: 'Default (Internal)' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Start export' }));
 
-    await vi.waitFor(() => expect(created).toEqual({ pageId: '10', format: 'pdf', includeChildren: true }));
+    await vi.waitFor(() =>
+      expect(created).toEqual({ pageId: '10', format: 'pdf', includeChildren: true, classification: '' }),
+    );
+  });
+
+  it('sends the chosen classification and warns about the watermark', async () => {
+    let created: { classification?: string } | undefined;
+    mockApi({
+      'GET /api/preferences': () => ({ body: prefs }),
+      'GET /api/confluence/pages': () => ({ body: { results: [page] } }),
+      'GET /api/confluence/pages/10/children': () => ({ body: { results: [] } }),
+      'POST /api/exports': (init) => {
+        created = JSON.parse(String(init?.body)) as { classification?: string };
+        return { status: 202, body: { id: 'e1' } };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<NewExportPage />, { route: '/new' });
+    await user.type(screen.getByLabelText(/Search for a page/), 'guide');
+    await user.click(await screen.findByRole('button', { name: /Guide utilisateur/ }));
+
+    await user.selectOptions(await screen.findByLabelText('Classification'), 'Confidential');
+    expect(screen.getByText(/“CONFIDENTIAL” will be printed diagonally/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Start export' }));
+    await vi.waitFor(() => expect(created?.classification).toBe('Confidential'));
+  });
+
+  it('hides the classification when none is configured', async () => {
+    mockApi({
+      'GET /api/preferences': () => ({ body: { ...prefs, classifications: [] } }),
+      'GET /api/confluence/pages': () => ({ body: { results: [page] } }),
+      'GET /api/confluence/pages/10/children': () => ({ body: { results: [] } }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<NewExportPage />, { route: '/new' });
+    await user.type(screen.getByLabelText(/Search for a page/), 'guide');
+    await user.click(await screen.findByRole('button', { name: /Guide utilisateur/ }));
+    expect(await screen.findByRole('button', { name: 'Start export' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Classification')).not.toBeInTheDocument();
   });
 
   it('displays API errors', async () => {

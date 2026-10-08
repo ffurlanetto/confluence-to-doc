@@ -22,10 +22,10 @@ taken with the product owner are recorded here so the lots stay consistent.
 ## Lots
 
 1. **Access and audit** — admin role from groups; append-only audit trail (database + SIEM logs);
-   audit page. *(ADR 0008)*
+   audit page. *(ADR 0008, done)*
 2. **Document traceability** — configurable classifications; "Exported by … on … – classification –
    reference" footer; diagonal watermark for marked levels; export id and exporter in the document
-   properties.
+   properties. *(ADR 0009)*
 3. **Isolation** — NetworkPolicy and seccomp in the chart; no external resource can reach LibreOffice;
    image scanning in CI; SBOM attached to releases.
 4. **Keys and load** — `ENCRYPTION_KEYS` key ring with rotation; global Confluence request budget; per-user

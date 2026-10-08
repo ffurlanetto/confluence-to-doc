@@ -45,6 +45,11 @@ export const prefs = {
   defaultFormat: 'docx',
   retentionHours: 48,
   maxPages: 500,
+  classifications: [
+    { label: 'Internal', watermark: false },
+    { label: 'Confidential', watermark: true },
+  ],
+  defaultClassification: 'Internal',
 };
 
 export const me = { id: 'u1', email: 'alice@example.com', name: 'Alice', isAdmin: false };

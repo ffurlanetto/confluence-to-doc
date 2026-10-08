@@ -37,6 +37,8 @@ type Repo interface {
 	MarkExpired(ctx context.Context, id uuid.UUID) error
 	PurgeExpired(ctx context.Context, keep time.Duration) (int64, error)
 	DeleteExpiredSessions(ctx context.Context) (int64, error)
+
+	GetUser(ctx context.Context, id uuid.UUID) (*domain.User, error)
 }
 
 // ClientProvider returns a Confluence client authenticated as the user.
@@ -68,6 +70,8 @@ type CreateRequest struct {
 	RootTitle       string
 	Format          domain.Format
 	IncludeChildren bool
+	// Classification is one of the configured labels, or empty.
+	Classification string
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*domain.Export, error) {
@@ -78,6 +82,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (*domain.Export
 		RootTitle:       req.RootTitle,
 		Format:          req.Format,
 		IncludeChildren: req.IncludeChildren,
+		Classification:  req.Classification,
 		MaxAttempts:     s.limits.MaxAttempts,
 	}
 	if err := s.repo.CreateExport(ctx, e, s.limits.MaxActivePerUser); err != nil {

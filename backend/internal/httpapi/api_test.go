@@ -17,6 +17,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence/fake"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
@@ -52,7 +53,7 @@ func (a headerAuth) Middleware(next http.Handler) http.Handler {
 
 type copyConverter struct{}
 
-func (copyConverter) Convert(_ context.Context, html []byte, _ domain.Format, dst io.Writer) error {
+func (copyConverter) Convert(_ context.Context, html []byte, _ domain.Format, _ docx.Marking, dst io.Writer) error {
 	_, err := dst.Write(html)
 	return err
 }
@@ -92,15 +93,17 @@ func newAPIWithWorker(t *testing.T, startWorker bool) *api {
 
 	pub, _ := url.Parse("http://app.test")
 	router := httpapi.NewRouter(httpapi.Deps{
-		Auth:      headerAuth{store: s},
-		Accounts:  acc,
-		Exports:   export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 3}, pool.Notify),
-		Audit:     audit.New(s, nil),
-		AuditLog:  s,
-		Ready:     s.Ping,
-		PublicURL: pub,
-		Retention: 48 * time.Hour,
-		MaxPages:  50,
+		Auth:                  headerAuth{store: s},
+		Accounts:              acc,
+		Exports:               export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 3}, pool.Notify),
+		Audit:                 audit.New(s, nil),
+		AuditLog:              s,
+		Ready:                 s.Ping,
+		PublicURL:             pub,
+		Retention:             48 * time.Hour,
+		MaxPages:              50,
+		Classifications:       []domain.Classification{{Label: "Internal"}, {Label: "Confidential", Watermark: true}},
+		DefaultClassification: "Internal",
 	})
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)

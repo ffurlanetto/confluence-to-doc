@@ -116,6 +116,13 @@ export:
   pollInterval: 2s
   janitorInterval: 10m
 
+# -- Classifications offered when exporting, printed in every page footer.
+# ":watermark" also sets the label diagonally across every page; "none"
+# removes the choice. `default` applies when the user picks none.
+documents:
+  classifications: "Public, Internal, Confidential:watermark, Restricted:watermark"
+  defaultClassification: ""
+
 # -- Company Word template applied to every generated document.
 #
 # A .docx/.dotx is binary, so it lives in a ConfigMap's binaryData or in a

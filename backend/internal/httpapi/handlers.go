@@ -56,6 +56,15 @@ type preferencesResponse struct {
 	RetentionHours    int        `json:"retentionHours"`
 	MaxPages          int        `json:"maxPages"`
 	DocumentTemplate  string     `json:"documentTemplate,omitempty"`
+	// Classifications offered when exporting; the default applies when the
+	// user picks none.
+	Classifications       []classificationDTO `json:"classifications"`
+	DefaultClassification string              `json:"defaultClassification,omitempty"`
+}
+
+type classificationDTO struct {
+	Label     string `json:"label"`
+	Watermark bool   `json:"watermark"`
 }
 
 func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
@@ -66,13 +75,15 @@ func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, preferencesResponse{
-		ConfluenceBaseURL: h.d.Accounts.ConfluenceURL().String(),
-		HasPAT:            p.HasPAT(),
-		PATUpdatedAt:      p.PATUpdatedAt,
-		DefaultFormat:     string(p.DefaultFormat),
-		RetentionHours:    int(h.d.Retention.Hours()),
-		MaxPages:          h.d.MaxPages,
-		DocumentTemplate:  h.d.DocumentTemplate,
+		ConfluenceBaseURL:     h.d.Accounts.ConfluenceURL().String(),
+		HasPAT:                p.HasPAT(),
+		PATUpdatedAt:          p.PATUpdatedAt,
+		DefaultFormat:         string(p.DefaultFormat),
+		RetentionHours:        int(h.d.Retention.Hours()),
+		MaxPages:              h.d.MaxPages,
+		DocumentTemplate:      h.d.DocumentTemplate,
+		Classifications:       classificationDTOs(h.d.Classifications),
+		DefaultClassification: h.d.DefaultClassification,
 	})
 }
 
@@ -122,6 +133,29 @@ func (h *handlers) deletePAT(w http.ResponseWriter, r *http.Request) {
 	}
 	h.record(r, domain.AuditEvent{Action: audit.ActionPATDelete})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func classificationDTOs(levels []domain.Classification) []classificationDTO {
+	out := make([]classificationDTO, 0, len(levels))
+	for _, c := range levels {
+		out = append(out, classificationDTO{Label: c.Label, Watermark: c.Watermark})
+	}
+	return out
+}
+
+// classification returns the configured label matching the requested one
+// (case-insensitively), "" when none was requested.
+func (h *handlers) classification(requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return "", nil
+	}
+	for _, c := range h.d.Classifications {
+		if strings.EqualFold(c.Label, requested) {
+			return c.Label, nil
+		}
+	}
+	return "", domain.ErrInvalidClassification
 }
 
 // ---------------------------------------------------------- confluence
@@ -214,6 +248,7 @@ type exportDTO struct {
 	Title           string     `json:"title"`
 	Format          string     `json:"format"`
 	IncludeChildren bool       `json:"includeChildren"`
+	Classification  string     `json:"classification,omitempty"`
 	Status          string     `json:"status"`
 	Error           string     `json:"error,omitempty"`
 	Attempts        int        `json:"attempts"`
@@ -229,7 +264,7 @@ type exportDTO struct {
 func toDTO(e *domain.Export) exportDTO {
 	return exportDTO{
 		ID: e.ID, PageID: e.RootPageID, Title: e.RootTitle, Format: string(e.Format),
-		IncludeChildren: e.IncludeChildren, Status: string(e.Status), Error: e.Error, Attempts: e.Attempts,
+		IncludeChildren: e.IncludeChildren, Classification: e.Classification, Status: string(e.Status), Error: e.Error, Attempts: e.Attempts,
 		PagesDone: e.PagesDone, PagesTotal: e.PagesTotal, FileSize: e.FileSize,
 		CreatedAt: e.CreatedAt, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt, ExpiresAt: e.ExpiresAt,
 	}
@@ -253,6 +288,7 @@ func (h *handlers) createExport(w http.ResponseWriter, r *http.Request) {
 		PageID          string `json:"pageId"`
 		Format          string `json:"format"`
 		IncludeChildren *bool  `json:"includeChildren"`
+		Classification  string `json:"classification"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -268,6 +304,11 @@ func (h *handlers) createExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	includeChildren := req.IncludeChildren == nil || *req.IncludeChildren
+	classification, err := h.classification(req.Classification)
+	if err != nil {
+		handleError(w, r, err)
+		return
+	}
 
 	// Fail fast (synchronously) on an invalid PAT or an inaccessible page,
 	// and capture the title for the export list.
@@ -282,7 +323,7 @@ func (h *handlers) createExport(w http.ResponseWriter, r *http.Request) {
 	}
 	e, err := h.d.Exports.Create(r.Context(), export.CreateRequest{
 		UserID: auth.UserFrom(r.Context()).ID, RootPageID: page.ID, RootTitle: page.Title,
-		Format: format, IncludeChildren: includeChildren,
+		Format: format, IncludeChildren: includeChildren, Classification: classification,
 	})
 	if err != nil {
 		handleError(w, r, err)
@@ -291,7 +332,7 @@ func (h *handlers) createExport(w http.ResponseWriter, r *http.Request) {
 	h.record(r, domain.AuditEvent{
 		Action: audit.ActionExportCreate, TargetType: audit.TargetExport, TargetID: e.ID.String(),
 		Details: map[string]any{"pageId": page.ID, "title": page.Title, "space": page.SpaceKey,
-			"format": string(format), "includeChildren": includeChildren},
+			"format": string(format), "includeChildren": includeChildren, "classification": classification},
 	})
 	w.Header().Set("Location", "/api/exports/"+e.ID.String())
 	writeJSON(w, http.StatusAccepted, toDTO(e))
@@ -350,7 +391,7 @@ func (h *handlers) download(w http.ResponseWriter, r *http.Request) {
 		h.record(r, domain.AuditEvent{
 			Action: audit.ActionExportDownload, TargetType: audit.TargetExport, TargetID: e.ID.String(),
 			Details: map[string]any{"pageId": e.RootPageID, "title": e.RootTitle, "format": string(e.Format),
-				"size": e.FileSize, "pages": e.PagesTotal},
+				"size": e.FileSize, "pages": e.PagesTotal, "classification": e.Classification},
 		})
 	}
 	w.Header().Set("Content-Type", e.Format.ContentType())

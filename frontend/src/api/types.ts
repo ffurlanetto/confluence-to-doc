@@ -21,6 +21,16 @@ export interface Preferences {
   maxPages: number;
   /** Company Word template applied to generated documents; absent when the built-in styling is used. */
   documentTemplate?: string;
+  /** Levels offered when exporting; empty when the choice is disabled. */
+  classifications: Classification[];
+  /** Applied when the user picks no classification. */
+  defaultClassification?: string;
+}
+
+export interface Classification {
+  label: string;
+  /** The label is set diagonally across every page. */
+  watermark: boolean;
 }
 
 export interface PageSummary {
@@ -37,6 +47,7 @@ export interface Export {
   title: string;
   format: ExportFormat;
   includeChildren: boolean;
+  classification?: string;
   status: ExportStatus;
   error?: string;
   attempts: number;
@@ -53,6 +64,8 @@ export interface CreateExportRequest {
   pageId: string;
   format: ExportFormat;
   includeChildren: boolean;
+  /** One of Preferences.classifications, or empty for none. */
+  classification?: string;
 }
 
 export type AuditOutcome = 'success' | 'failure' | 'denied';

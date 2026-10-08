@@ -62,7 +62,10 @@ function ExportRow({ exp, onDelete, deleting }: { exp: Export; onDelete: () => v
     <tr>
       <td>
         <strong>{exp.title}</strong>
-        <div className="muted small">{exp.includeChildren ? 'With child pages' : 'Single page'}</div>
+        <div className="muted small">
+          {exp.includeChildren ? 'With child pages' : 'Single page'}
+          {exp.classification && ` · ${exp.classification}`}
+        </div>
         {exp.error && <div className="error small">{exp.error}</div>}
       </td>
       <td>{exp.format.toUpperCase()}</td>

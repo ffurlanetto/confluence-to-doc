@@ -83,8 +83,8 @@ through it, the PDF.
 | `author` | `dc:creator` — the Confluence account whose token fetched the pages |
 | `description` | `dc:description` — the source page, space and export date |
 | `keywords` | `cp:keywords` |
-| `classification` | `dc:subject`, from `DOCUMENT_CLASSIFICATION` |
-| anything else | a **custom** document property: page id, page title, space, source URL, page count, export date |
+| `classification` | `dc:subject`: the classification chosen for the export, else `DOCUMENT_CLASSIFICATION` |
+| anything else | a **custom** document property: page id, page title, space, source URL, page count, export date, export id, requester's email |
 
 ## Table of contents
 
