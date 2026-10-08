@@ -103,6 +103,8 @@ func run() error {
 		accounts.WithLimiter(ratelimit.NewShared(db, "confluence", cfg.ConfluenceRateLimit, float64(cfg.ConfluenceRateBurst)))
 	}
 	auditor := audit.New(db, nil)
+	lifecycle := account.NewLifecycle(db, blobs, auditor, account.LogNotifier{})
+	lifecycle.Retention, lifecycle.Notice = cfg.AccountRetention, cfg.AccountDeletionNotice
 
 	// The company Word template is validated at startup: a broken template
 	// must stop the process, not every export.
@@ -122,7 +124,7 @@ func run() error {
 	var notify func()
 
 	if cfg.Role.RunsWorker() {
-		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Template: template}
+		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Template: template, Language: cfg.Export.Language}
 		pool := export.NewPool(db, accounts, conv, blobs, export.WorkerConfig{
 			Concurrency:       cfg.Export.WorkerConcurrency,
 			PollInterval:      cfg.Export.PollInterval,
@@ -140,7 +142,8 @@ func run() error {
 		})
 		notify = pool.Notify
 		janitor := export.NewJanitor(db, blobs, cfg.Export.JanitorInterval).WithAudit(auditor, db, cfg.AuditRetention).
-			WithKeyRotation(accounts)
+			WithKeyRotation(accounts).
+			WithAccountPurge(lifecycle)
 		wg.Add(2)
 		go func() { defer wg.Done(); pool.Run(ctx) }()
 		go func() { defer wg.Done(); janitor.Run(ctx) }()
@@ -163,6 +166,7 @@ func run() error {
 			Accounts:              accounts,
 			Exports:               export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
 			Audit:                 auditor,
+			Lifecycle:             lifecycle,
 			AuditLog:              db,
 			TrustedProxies:        cfg.TrustedProxies,
 			UserLimiter:           keyedLimiter(cfg.APIRateLimit, cfg.APIRateBurst),
@@ -315,6 +319,7 @@ func connectOIDC(ctx context.Context, cfg *config.Config, db *store.Store, seale
 		IssuerURL: cfg.OIDC.IssuerURL, ClientID: cfg.OIDC.ClientID, ClientSecret: cfg.OIDC.ClientSecret,
 		Scopes: cfg.OIDC.Scopes, PublicURL: cfg.PublicURL, SessionTTL: cfg.SessionTTL, SecureCookie: cfg.SecureCookies(),
 		GroupsClaim: cfg.OIDC.GroupsClaim, AdminGroups: cfg.OIDC.AdminGroups,
+		RevalidateInterval: cfg.SessionRevalidateInterval,
 	}
 	if len(acfg.AdminGroups) == 0 {
 		slog.Warn("OIDC_ADMIN_GROUPS is empty: nobody can use the administration pages")

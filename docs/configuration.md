@@ -29,6 +29,9 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `LOG_FORMAT`                   | `json`                  | `json` or `text`                                                |
 | `OIDC_SCOPES`                  | `openid profile email`  | Requested scopes                                                |
 | `SESSION_TTL`                  | `12h`                   | Session lifetime                                                |
+| `SESSION_REVALIDATE_INTERVAL`  | `15m`                   | How often a session is re-checked with the identity provider through its refresh token; a disabled account then loses access (`0` = never) |
+| `ACCOUNT_RETENTION`            | `4320h` (180 days)      | Accounts unused for that long are deleted with their token and exports (`0` = never) |
+| `ACCOUNT_DELETION_NOTICE`      | `360h` (15 days)        | Warning given before an inactive account is deleted; no account is deleted without it |
 | `OIDC_GROUPS_CLAIM`            | `groups`                | Claim listing the user's groups or roles; a dotted path for nested claims (`realm_access.roles`) |
 | `OIDC_ADMIN_GROUPS`            | _(empty)_               | Comma-separated groups (or roles) granting the administration pages. Empty = no administrator |
 | `AUDIT_RETENTION`              | `8760h`                 | How long audit events stay in the database (minimum `720h`)     |
@@ -53,6 +56,7 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `SOFFICE_PATH`                 | `soffice`               | LibreOffice binary                                              |
 | `WORD_TEMPLATE_PATH`           | _(empty)_               | Company Word template applied to every document                 |
 | `DOCUMENT_CLASSIFICATION`      | _(empty)_               | Default classification, used when the requester picks none: subject property and page footer |
+| `DOCUMENT_LANGUAGE`            | _(empty)_               | Default language of the documents (BCP 47, e.g. `fr-FR`), declared to screen readers in the tagged PDF. Empty keeps the template's, or `en-US` |
 | `DOCUMENT_CLASSIFICATIONS`     | `Public, Internal, Confidential:watermark, Restricted:watermark` | Levels offered when exporting; `:watermark` sets the label diagonally across every page. `none` removes the choice |
 
 ## Telemetry (OpenTelemetry)
@@ -200,7 +204,27 @@ Declare a **confidential** client with:
 - the *Authorization Code* flow (with PKCE S256 if configurable);
 - redirect URI: `${PUBLIC_URL}/auth/callback`;
 - post-logout redirect URI: `${PUBLIC_URL}/`;
-- scopes: `openid profile email`.
+- scopes: `openid profile email`;
+- **back-channel logout URI**: `${PUBLIC_URL}/auth/backchannel-logout`, with "session required" (`sid`) on
+  if offered. Signing out or disabling a user at the provider then ends their sessions here at once.
+
+Sessions are also re-checked every `SESSION_REVALIDATE_INTERVAL` with the refresh token the provider
+issued at sign-in: a refusal ends the session, and group changes (the admin role) apply without waiting for
+the next sign-in. Keycloak and Okta issue refresh tokens by default; **Entra ID** only with the
+`offline_access` scope (`OIDC_SCOPES=openid profile email offline_access`). Without a refresh token, a
+session lasts until `SESSION_TTL` unless a back-channel logout ends it.
+
+## Account lifecycle and personal data
+
+- Users can **delete their account** from *Preferences*: token, preferences, sessions and exports with
+  their documents are erased immediately (`account.delete` audit event).
+- Accounts **unused for `ACCOUNT_RETENTION`** are deleted the same way (`account.purge`). Their owner is
+  warned `ACCOUNT_DELETION_NOTICE` beforehand — by the notification channels configured, otherwise only in
+  the logs — and signing in again cancels the deletion. Nobody is deleted without that notice, accounts
+  already past the retention when the feature arrives included.
+- The **Confluence token's expiry** is read from Data Center's token API when it is saved; users are warned
+  in the application 14 days before.
+- [gdpr.md](gdpr.md) is the record of processing to complete with your data protection officer.
 
 ### Rotating the encryption key
 

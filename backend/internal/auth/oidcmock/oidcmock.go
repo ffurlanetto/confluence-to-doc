@@ -38,11 +38,19 @@ type Provider struct {
 	// ClaimsInUserInfoOnly mimics providers that leave groups out of the ID
 	// token and only expose them through UserInfo.
 	ClaimsInUserInfoOnly bool
+	// SessionID is put in ID tokens as "sid", the provider's session id.
+	SessionID string
+	// Revoked makes refresh requests fail with invalid_grant, as for a user
+	// disabled or signed out at the provider.
+	Revoked bool
+	// Refreshes counts refresh token exchanges.
+	Refreshes int
 
-	key    *rsa.PrivateKey
-	mu     sync.Mutex
-	codes  map[string]grant
-	tokens map[string]bool
+	key           *rsa.PrivateKey
+	mu            sync.Mutex
+	codes         map[string]grant
+	tokens        map[string]bool
+	refreshTokens map[string]bool
 }
 
 type grant struct {
@@ -56,7 +64,7 @@ func New(clientID, clientSecret string, user User) *Provider {
 		panic(err)
 	}
 	return &Provider{ClientID: clientID, ClientSecret: clientSecret, User: user, key: key,
-		codes: map[string]grant{}, tokens: map[string]bool{}}
+		codes: map[string]grant{}, tokens: map[string]bool{}, refreshTokens: map[string]bool{}}
 }
 
 func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +136,10 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, "invalid_client")
 		return
 	}
+	if r.PostForm.Get("grant_type") == "refresh_token" {
+		p.refresh(w, r.PostForm.Get("refresh_token"))
+		return
+	}
 	code := r.PostForm.Get("code")
 	p.mu.Lock()
 	g, found := p.codes[code]
@@ -146,11 +158,23 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	p.issue(w, signer, g.nonce)
+}
+
+// issue answers a token request with an ID token, an access token and a
+// refresh token.
+func (p *Provider) issue(w http.ResponseWriter, signer jose.Signer, nonce string) {
 	now := time.Now()
 	claims := map[string]any{
 		"iss": p.Issuer, "sub": p.User.Subject, "aud": p.ClientID,
-		"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(), "nonce": g.nonce,
+		"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
 		"email": p.User.Email, "name": p.User.Name,
+	}
+	if nonce != "" {
+		claims["nonce"] = nonce
+	}
+	if p.SessionID != "" {
+		claims["sid"] = p.SessionID
 	}
 	if !p.ClaimsInUserInfoOnly {
 		for k, v := range p.User.Claims {
@@ -162,13 +186,64 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	access := randString()
+	access, refresh := randString(), randString()
 	p.mu.Lock()
 	p.tokens[access] = true
+	p.refreshTokens[refresh] = true
 	p.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token": access, "token_type": "Bearer", "expires_in": 300, "id_token": idToken,
+		"refresh_token": refresh,
 	})
+}
+
+// refresh exchanges a refresh token, rotating it as most providers do.
+func (p *Provider) refresh(w http.ResponseWriter, token string) {
+	p.mu.Lock()
+	valid := p.refreshTokens[token] && !p.Revoked
+	delete(p.refreshTokens, token)
+	p.Refreshes++
+	p.mu.Unlock()
+	if !valid {
+		oauthError(w, "invalid_grant")
+		return
+	}
+	signer, err := p.signer()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	p.issue(w, signer, "")
+}
+
+func (p *Provider) signer() (jose.Signer, error) {
+	return jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: p.key, KeyID: "k1"}},
+		(&jose.SignerOptions{}).WithType("JWT"))
+}
+
+// LogoutToken signs a back-channel logout token with the provider's key;
+// extra claims override the defaults (events, iat, jti, aud, iss, sub, sid).
+func (p *Provider) LogoutToken(extra map[string]any) (string, error) {
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: p.key, KeyID: "k1"}},
+		(&jose.SignerOptions{}).WithType("logout+jwt"))
+	if err != nil {
+		return "", err
+	}
+	claims := map[string]any{
+		"iss": p.Issuer, "aud": p.ClientID, "sub": p.User.Subject, "iat": time.Now().Unix(), "jti": randString(),
+		"events": map[string]any{"http://schemas.openid.net/event/backchannel-logout": map[string]any{}},
+	}
+	if p.SessionID != "" {
+		claims["sid"] = p.SessionID
+	}
+	for k, v := range extra {
+		if v == nil {
+			delete(claims, k)
+			continue
+		}
+		claims[k] = v
+	}
+	return jwt.Signed(signer).Claims(claims).Serialize()
 }
 
 func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {

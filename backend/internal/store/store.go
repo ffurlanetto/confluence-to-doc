@@ -43,6 +43,10 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+// Pool exposes the connection pool, for tests that set up or check state the
+// store's own methods do not cover (backdating a sign-in, a database rule).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 // ---------------------------------------------------------------- users
@@ -74,15 +78,17 @@ func (s *Store) GetUser(ctx context.Context, id uuid.UUID) (*domain.User, error)
 // identity provider granted this time, and the login time.
 func (s *Store) RecordLogin(ctx context.Context, userID uuid.UUID, isAdmin bool) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE users SET is_admin = $2, last_login_at = now() WHERE id = $1`, userID, isAdmin)
+		`UPDATE users SET is_admin = $2, last_login_at = now(), inactivity_warned_at = NULL WHERE id = $1`, userID, isAdmin)
 	return err
 }
 
 // ------------------------------------------------------------- sessions
 
-func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
-		tokenHash, userID, expiresAt)
+func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, sess domain.Session) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO sessions (token_hash, user_id, expires_at, sid, refresh_token, revalidate_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		tokenHash, sess.UserID, sess.ExpiresAt, sess.SID, sess.RefreshToken, sess.RevalidateAt)
 	return err
 }
 
@@ -91,10 +97,12 @@ func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (*domain.User
 	u := &domain.User{}
 	sess := &domain.Session{}
 	err := s.pool.QueryRow(ctx, `
-		SELECT u.id, u.issuer, u.subject, u.email, u.name, u.is_admin, u.created_at, s.expires_at
+		SELECT u.id, u.issuer, u.subject, u.email, u.name, u.is_admin, u.created_at,
+		       s.expires_at, s.sid, s.refresh_token, s.revalidate_at
 		  FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token_hash = $1 AND s.expires_at > now()`, tokenHash,
-	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt, &sess.ExpiresAt)
+	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt,
+		&sess.ExpiresAt, &sess.SID, &sess.RefreshToken, &sess.RevalidateAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil, domain.ErrNotFound
 	}
@@ -103,6 +111,40 @@ func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (*domain.User
 	}
 	sess.UserID = u.ID
 	return u, sess, nil
+}
+
+// ClaimRevalidation takes the session's re-check for the caller, pushing the
+// next one to next, so that concurrent requests do not refresh the same token
+// twice (providers that rotate refresh tokens revoke a reused one). It reports
+// false when the re-check is not due or another request took it.
+func (s *Store) ClaimRevalidation(ctx context.Context, tokenHash []byte, next time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE sessions SET revalidate_at = $2
+		 WHERE token_hash = $1 AND revalidate_at <= now() AND expires_at > now()`, tokenHash, next)
+	return tag.RowsAffected() == 1, err
+}
+
+// StoreRefreshToken keeps the refresh token the provider issued in exchange
+// for the previous one.
+func (s *Store) StoreRefreshToken(ctx context.Context, tokenHash, refreshToken []byte) error {
+	_, err := s.pool.Exec(ctx, `UPDATE sessions SET refresh_token = $2 WHERE token_hash = $1`, tokenHash, refreshToken)
+	return err
+}
+
+// DeleteSessionsBySID ends the sessions opened under an identity provider
+// session; DeleteSessionsBySubject ends every session of a user.
+func (s *Store) DeleteSessionsBySID(ctx context.Context, sid string) (int64, error) {
+	if sid == "" {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE sid = $1`, sid)
+	return tag.RowsAffected(), err
+}
+
+func (s *Store) DeleteSessionsBySubject(ctx context.Context, issuer, subject string) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE issuer = $1 AND subject = $2)`, issuer, subject)
+	return tag.RowsAffected(), err
 }
 
 func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
@@ -121,8 +163,8 @@ func (s *Store) GetPreferences(ctx context.Context, userID uuid.UUID) (*domain.P
 	p := &domain.Preferences{UserID: userID, DefaultFormat: domain.FormatPDF}
 	var format string
 	err := s.pool.QueryRow(ctx, `
-		SELECT encrypted_pat, pat_updated_at, default_format FROM user_preferences WHERE user_id = $1`, userID,
-	).Scan(&p.EncryptedPAT, &p.PATUpdatedAt, &format)
+		SELECT encrypted_pat, pat_updated_at, pat_expires_at, default_format FROM user_preferences WHERE user_id = $1`, userID,
+	).Scan(&p.EncryptedPAT, &p.PATUpdatedAt, &p.PATExpiresAt, &format)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, nil
 	}
@@ -133,14 +175,16 @@ func (s *Store) GetPreferences(ctx context.Context, userID uuid.UUID) (*domain.P
 	return p, nil
 }
 
-// SetPAT stores (encryptedPAT != nil) or clears (nil) the user's token.
-func (s *Store) SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byte) error {
+// SetPAT stores (encryptedPAT != nil) or clears (nil) the user's token, with
+// its expiry when Confluence reported one.
+func (s *Store) SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byte, expiresAt *time.Time) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO user_preferences (user_id, encrypted_pat, pat_updated_at)
-		VALUES ($1, $2, CASE WHEN $2::bytea IS NULL THEN NULL ELSE now() END)
+		INSERT INTO user_preferences (user_id, encrypted_pat, pat_updated_at, pat_expires_at)
+		VALUES ($1, $2, CASE WHEN $2::bytea IS NULL THEN NULL ELSE now() END, $3)
 		ON CONFLICT (user_id) DO UPDATE
-		   SET encrypted_pat = EXCLUDED.encrypted_pat, pat_updated_at = EXCLUDED.pat_updated_at, updated_at = now()`,
-		userID, encryptedPAT)
+		   SET encrypted_pat = EXCLUDED.encrypted_pat, pat_updated_at = EXCLUDED.pat_updated_at,
+		       pat_expires_at = EXCLUDED.pat_expires_at, updated_at = now()`,
+		userID, encryptedPAT, expiresAt)
 	return err
 }
 

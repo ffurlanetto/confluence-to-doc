@@ -44,11 +44,68 @@ func (m *memRepo) UpsertUser(_ context.Context, iss, sub, email, name string) (*
 	return u, nil
 }
 
-func (m *memRepo) CreateSession(_ context.Context, h []byte, uid uuid.UUID, exp time.Time) error {
+func (m *memRepo) CreateSession(_ context.Context, h []byte, sess domain.Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sessions[hex.EncodeToString(h)] = domain.Session{UserID: uid, ExpiresAt: exp}
+	m.sessions[hex.EncodeToString(h)] = sess
 	return nil
+}
+
+func (m *memRepo) ClaimRevalidation(_ context.Context, h []byte, next time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[hex.EncodeToString(h)]
+	if !ok || s.RevalidateAt == nil || time.Now().Before(*s.RevalidateAt) {
+		return false, nil
+	}
+	s.RevalidateAt = &next
+	m.sessions[hex.EncodeToString(h)] = s
+	return true, nil
+}
+
+func (m *memRepo) StoreRefreshToken(_ context.Context, h, rt []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.sessions[hex.EncodeToString(h)]
+	s.RefreshToken = rt
+	m.sessions[hex.EncodeToString(h)] = s
+	return nil
+}
+
+func (m *memRepo) DeleteSessionsBySID(_ context.Context, sid string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for k, s := range m.sessions {
+		if s.SID == sid {
+			delete(m.sessions, k)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *memRepo) DeleteSessionsBySubject(_ context.Context, iss, sub string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[iss+"|"+sub]
+	if !ok {
+		return 0, nil
+	}
+	var n int64
+	for k, s := range m.sessions {
+		if s.UserID == u.ID {
+			delete(m.sessions, k)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (m *memRepo) sessionCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sessions)
 }
 
 func (m *memRepo) SessionUser(_ context.Context, h []byte) (*domain.User, *domain.Session, error) {
@@ -111,6 +168,7 @@ type harness struct {
 	client *http.Client
 	repo   *memRepo
 	events *events
+	idp    *oidcmock.Provider
 }
 
 // option tweaks the provider or the authenticator configuration.
@@ -146,13 +204,14 @@ func newHarness(t *testing.T, opts ...option) *harness {
 	mux.HandleFunc("GET /auth/login", a.Login)
 	mux.HandleFunc("GET /auth/callback", a.Callback)
 	mux.HandleFunc("POST /auth/logout", a.Logout)
+	mux.HandleFunc("POST /auth/backchannel-logout", a.BackchannelLogout)
 	mux.Handle("GET /api/me", a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(auth.UserFrom(r.Context()).Email))
 	})))
 	mux.HandleFunc("GET /done", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("landed")) })
 
 	jar, _ := cookiejar.New(nil)
-	return &harness{app: app, client: &http.Client{Jar: jar}, repo: repo, events: ev}
+	return &harness{app: app, client: &http.Client{Jar: jar}, repo: repo, events: ev, idp: idp}
 }
 
 func (h *harness) get(t *testing.T, path string) (int, string) {

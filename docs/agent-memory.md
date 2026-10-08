@@ -246,3 +246,20 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   transaction and would refill nothing between two statements of the same transaction.
 - `keyedLimiter` in `cmd/server` returns an untyped nil when a limit is disabled: a nil `*ratelimit.Keyed`
   stored in the `httpapi.Limiter` interface would not compare equal to nil and would be called.
+
+### Session and account lifecycle (ADR 0012)
+
+- **LibreOffice ignores `<html lang>`** on import and writes `en-US` as the DOCX default language, which the
+  PDF then declares as `/Lang`. `docx.SetLanguage` rewrites the default in `w:docDefaults` instead; the PDF
+  follows.
+- PDF export options go in the filter string as JSON:
+  `pdf:writer_pdf_Export:{"UseTaggedPDF":{"type":"boolean","value":"true"},...}`. LibreOffice 24.2 tags by
+  default already, but older versions do not, and `PDFUACompliance` is never on by default.
+- Revalidation is claimed with `UPDATE sessions SET revalidate_at = … WHERE revalidate_at <= now()`: only
+  the request that updates the row refreshes. Two concurrent refreshes with the same refresh token make
+  Keycloak (with rotation) revoke the whole session.
+- `InactiveUsers` only returns accounts warned at least `ACCOUNT_DELETION_NOTICE` ago. Deleting by
+  inactivity alone would remove, on the first run, every account already past the retention — without
+  notice.
+- Data Center personal access tokens are the base64 of `<numeric id>:<secret bytes>`; the id is what
+  `/rest/pat/latest/tokens/{id}` takes.

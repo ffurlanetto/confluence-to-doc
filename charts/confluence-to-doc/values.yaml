@@ -75,6 +75,14 @@ existingEncryptionKeySecretKey: ENCRYPTION_KEY
 encryptionKeyRing: false
 
 sessionTtl: 12h
+# -- How often a session is re-checked with the identity provider ("0" = never).
+sessionRevalidateInterval: 15m
+
+accounts:
+  # -- Accounts unused for this long are deleted with their data ("0" = never),
+  # after a warning `deletionNotice` beforehand.
+  retention: 4320h
+  deletionNotice: 360h
 
 audit:
   # -- How long audit events stay in the database (minimum 720h). The SIEM
@@ -137,6 +145,9 @@ export:
 documents:
   classifications: "Public, Internal, Confidential:watermark, Restricted:watermark"
   defaultClassification: ""
+  # -- Default language of the documents (BCP 47, e.g. fr-FR), declared in the
+  # tagged PDF. Empty keeps the Word template's.
+  language: ""
 
 # -- Company Word template applied to every generated document.
 #

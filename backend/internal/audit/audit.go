@@ -21,20 +21,26 @@ import (
 // Actions recorded in the audit trail. They are part of the contract with the
 // SIEM: rename one only together with the detection rules that use it.
 const (
-	ActionLogin          = "auth.login"
-	ActionLogout         = "auth.logout"
-	ActionPATSet         = "pat.set"
-	ActionPATDelete      = "pat.delete"
-	ActionPreferences    = "preferences.update"
-	ActionExportCreate   = "export.create"
-	ActionExportDelete   = "export.delete"
-	ActionExportDownload = "export.download"
-	ActionExportComplete = "export.complete"
-	ActionExportFail     = "export.fail"
-	ActionExportExpire   = "export.expire"
-	ActionAdminAccess    = "admin.access"
-	ActionAuditRead      = "admin.audit.read"
-	ActionKeyRotation    = "keys.rotate"
+	ActionLogin  = "auth.login"
+	ActionLogout = "auth.logout"
+	// ActionSessionRevoked and ActionBackchannelLogout end sessions on the
+	// identity provider's word (see internal/auth/lifecycle.go).
+	ActionSessionRevoked    = "auth.session_revoked"
+	ActionBackchannelLogout = "auth.backchannel_logout"
+	ActionPATSet            = "pat.set"
+	ActionPATDelete         = "pat.delete"
+	ActionPreferences       = "preferences.update"
+	ActionExportCreate      = "export.create"
+	ActionExportDelete      = "export.delete"
+	ActionExportDownload    = "export.download"
+	ActionExportComplete    = "export.complete"
+	ActionExportFail        = "export.fail"
+	ActionExportExpire      = "export.expire"
+	ActionAdminAccess       = "admin.access"
+	ActionAuditRead         = "admin.audit.read"
+	ActionKeyRotation       = "keys.rotate"
+	ActionAccountDelete     = "account.delete"
+	ActionAccountPurge      = "account.purge"
 )
 
 // Target types.

@@ -144,7 +144,10 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
 
 - **Authentication** — OIDC Authorization Code + PKCE + nonce, server side (BFF pattern). OAuth tokens
   never leave the backend; the browser only holds an opaque session cookie (`HttpOnly`, `SameSite=Lax`,
-  `Secure` + `__Host-` prefix over HTTPS). Only its SHA-256 is stored.
+  `Secure` + `__Host-` prefix over HTTPS). Only its SHA-256 is stored. Sessions are re-checked with the
+  provider and ended by back-channel logout (ADR 0012).
+- **Personal data** — users can delete their account; unused accounts are deleted after a notice; see
+  [gdpr.md](gdpr.md).
 - **CSRF** — a mandatory `X-CSRF-Protection: 1` header plus `Origin` / `Sec-Fetch-Site` checks.
 - **PAT** — validated against Confluence before being saved, encrypted with AES-256-GCM bound to the user
   id under a key ring that can be rotated without users re-entering their tokens (ADR 0011), never returned by the API, and only ever sent to the configured Confluence origin (redirects to

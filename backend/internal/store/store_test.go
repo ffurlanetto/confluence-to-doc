@@ -37,7 +37,7 @@ func TestUsersSessionsPreferences(t *testing.T) {
 	}
 
 	hash := []byte("0123456789abcdef0123456789abcdef")
-	if err := s.CreateSession(ctx, hash, u.ID, time.Now().Add(time.Hour)); err != nil {
+	if err := s.CreateSession(ctx, hash, domain.Session{UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	got, _, err := s.SessionUser(ctx, hash)
@@ -45,7 +45,7 @@ func TestUsersSessionsPreferences(t *testing.T) {
 		t.Fatalf("session lookup: %+v %v", got, err)
 	}
 	expired := []byte("expired-expired-expired-expired!")
-	_ = s.CreateSession(ctx, expired, u.ID, time.Now().Add(-time.Minute))
+	_ = s.CreateSession(ctx, expired, domain.Session{UserID: u.ID, ExpiresAt: time.Now().Add(-time.Minute)})
 	if _, _, err := s.SessionUser(ctx, expired); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expired session must not resolve, got %v", err)
 	}
@@ -57,7 +57,7 @@ func TestUsersSessionsPreferences(t *testing.T) {
 	if err != nil || p.HasPAT() || p.DefaultFormat != domain.FormatPDF {
 		t.Fatalf("defaults: %+v %v", p, err)
 	}
-	if err := s.SetPAT(ctx, u.ID, []byte("cipher")); err != nil {
+	if err := s.SetPAT(ctx, u.ID, []byte("cipher"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetDefaultFormat(ctx, u.ID, domain.FormatDOCX); err != nil {
@@ -67,7 +67,7 @@ func TestUsersSessionsPreferences(t *testing.T) {
 	if !p.HasPAT() || p.PATUpdatedAt == nil || p.DefaultFormat != domain.FormatDOCX {
 		t.Fatalf("after update: %+v", p)
 	}
-	if err := s.SetPAT(ctx, u.ID, nil); err != nil {
+	if err := s.SetPAT(ctx, u.ID, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	p, _ = s.GetPreferences(ctx, u.ID)
@@ -293,7 +293,7 @@ func TestRecordLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := []byte("admin-session-hash-000000000000")
-	_ = s.CreateSession(ctx, hash, u.ID, time.Now().Add(time.Hour))
+	_ = s.CreateSession(ctx, hash, domain.Session{UserID: u.ID, ExpiresAt: time.Now().Add(time.Hour)})
 	got, _, err := s.SessionUser(ctx, hash)
 	if err != nil || !got.IsAdmin {
 		t.Fatalf("session user admin=%v err=%v", got != nil && got.IsAdmin, err)

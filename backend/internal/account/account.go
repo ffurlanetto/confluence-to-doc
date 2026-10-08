@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,7 +25,7 @@ var ErrInvalidPAT = errors.New("the personal access token was rejected by Conflu
 
 type Repo interface {
 	GetPreferences(ctx context.Context, userID uuid.UUID) (*domain.Preferences, error)
-	SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byte) error
+	SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byte, expiresAt *time.Time) error
 	SetDefaultFormat(ctx context.Context, userID uuid.UUID, f domain.Format) error
 	PATsNotUnderKey(ctx context.Context, keyID string, after uuid.UUID, limit int) ([]store.EncryptedPAT, error)
 	ReplacePAT(ctx context.Context, userID uuid.UUID, old, replacement []byte) (bool, error)
@@ -82,14 +83,20 @@ func (s *Service) SetPAT(ctx context.Context, userID uuid.UUID, pat string) (*co
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.SetPAT(ctx, userID, enc); err != nil {
+	// Best effort: an older Confluence, or a token it cannot describe, simply
+	// leaves the expiry unknown.
+	expires, err := s.newClient(pat).TokenExpiry(ctx)
+	if err != nil {
+		slog.DebugContext(ctx, "token expiry unavailable", "err", err)
+	}
+	if err := s.repo.SetPAT(ctx, userID, enc, expires); err != nil {
 		return nil, err
 	}
 	return cu, nil
 }
 
 func (s *Service) ClearPAT(ctx context.Context, userID uuid.UUID) error {
-	return s.repo.SetPAT(ctx, userID, nil)
+	return s.repo.SetPAT(ctx, userID, nil, nil)
 }
 
 func (s *Service) SetDefaultFormat(ctx context.Context, userID uuid.UUID, f domain.Format) error {

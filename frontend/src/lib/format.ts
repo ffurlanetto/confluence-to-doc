@@ -25,3 +25,10 @@ export const formatRemaining = (iso: string | undefined, now: Date = new Date())
   const hours = Math.floor(minutes / 60);
   return `${hours} h`;
 };
+
+/** Days left until `iso` (negative once past), rounded down. */
+export const daysUntil = (iso: string, now: Date = new Date()): number =>
+  Math.floor((new Date(iso).getTime() - now.getTime()) / 86_400_000);
+
+/** How soon before its expiry the user is warned about the Confluence token. */
+export const PAT_WARNING_DAYS = 14;

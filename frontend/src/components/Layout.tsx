@@ -3,7 +3,8 @@ import { Link, NavLink } from 'react-router-dom';
 
 import { api } from '../api/client';
 import { usePreferences } from '../api/hooks';
-import type { Me } from '../api/types';
+import type { Me, Preferences } from '../api/types';
+import { daysUntil, formatDate, PAT_WARNING_DAYS } from '../lib/format';
 
 async function logout() {
   try {
@@ -37,6 +38,7 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
           </button>
         </div>
       </header>
+      {prefs.data && <PatExpiryBanner prefs={prefs.data} />}
       {prefs.data && !prefs.data.hasPat && (
         <div className="banner" role="alert">
           No Confluence personal access token is configured.{' '}
@@ -45,5 +47,19 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
       )}
       <main>{children}</main>
     </>
+  );
+}
+
+function PatExpiryBanner({ prefs }: { prefs: Preferences }) {
+  if (!prefs.hasPat || !prefs.patExpiresAt) return null;
+  const days = daysUntil(prefs.patExpiresAt);
+  if (days > PAT_WARNING_DAYS) return null;
+  return (
+    <div className="banner" role="alert">
+      {days < 0
+        ? `Your Confluence token expired on ${formatDate(prefs.patExpiresAt)}.`
+        : `Your Confluence token expires on ${formatDate(prefs.patExpiresAt)}.`}{' '}
+      <Link to="/settings">Save a new one in the preferences</Link> to keep exporting.
+    </div>
   );
 }

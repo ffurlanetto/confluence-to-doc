@@ -35,10 +35,18 @@ type LibreOffice struct {
 	// document. PDFs are then produced from the templated DOCX, so both
 	// formats carry the same header, fonts and page setup.
 	Template *docx.Template
+	// Language is the documents' default language (BCP 47, e.g. fr-FR), which
+	// a tagged PDF declares for screen readers. Empty keeps the template's,
+	// or LibreOffice's en-US.
+	Language string
 }
 
 var filters = map[domain.Format]string{
-	domain.FormatPDF:  "pdf:writer_pdf_Export",
+	// A tagged PDF carries the document structure (headings, lists, tables,
+	// reading order) that screen readers and reflowing viewers need, and the
+	// PDF/UA identification says it was produced for that purpose.
+	domain.FormatPDF: `pdf:writer_pdf_Export:{"UseTaggedPDF":{"type":"boolean","value":"true"},` +
+		`"PDFUACompliance":{"type":"boolean","value":"true"}}`,
 	domain.FormatDOCX: "docx:MS Word 2007 XML",
 }
 
@@ -73,6 +81,9 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 		return err
 	}
 	if document, err = docx.Mark(document, marking); err != nil {
+		return err
+	}
+	if document, err = docx.SetLanguage(document, l.Language); err != nil {
 		return err
 	}
 	if format == domain.FormatDOCX {

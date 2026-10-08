@@ -372,3 +372,39 @@ func TestRateLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestDocumentLanguage(t *testing.T) {
+	env := baseEnv()
+	env["DOCUMENT_LANGUAGE"] = "fr-FR"
+	if cfg, err := load(getter(env)); err != nil || cfg.Export.Language != "fr-FR" {
+		t.Fatalf("language: %v", err)
+	}
+	env["DOCUMENT_LANGUAGE"] = "French"
+	if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), "DOCUMENT_LANGUAGE") {
+		t.Fatalf("want a DOCUMENT_LANGUAGE error, got %v", err)
+	}
+}
+
+func TestAccountRetention(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil || cfg.AccountRetention != 180*24*time.Hour || cfg.AccountDeletionNotice != 15*24*time.Hour {
+		t.Fatalf("defaults: %v %v %v", cfg.AccountRetention, cfg.AccountDeletionNotice, err)
+	}
+	env := baseEnv()
+	env["ACCOUNT_RETENTION"] = "0"
+	if _, err := load(getter(env)); err != nil {
+		t.Errorf("0 keeps accounts forever: %v", err)
+	}
+	env["ACCOUNT_RETENTION"] = "240h"
+	env["ACCOUNT_DELETION_NOTICE"] = "360h"
+	if _, err := load(getter(env)); err == nil {
+		t.Error("a notice longer than the retention must be refused")
+	}
+}
+
+func TestSessionRevalidateInterval(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil || cfg.SessionRevalidateInterval != 15*time.Minute {
+		t.Fatalf("default: %v %v", cfg.SessionRevalidateInterval, err)
+	}
+}

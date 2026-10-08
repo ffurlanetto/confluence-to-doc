@@ -34,6 +34,9 @@ type headerAuth struct{ store *store.Store }
 func (headerAuth) Login(w http.ResponseWriter, _ *http.Request)    { w.WriteHeader(http.StatusFound) }
 func (headerAuth) Callback(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusFound) }
 func (headerAuth) Logout(w http.ResponseWriter, _ *http.Request)   { w.WriteHeader(http.StatusOK) }
+func (headerAuth) BackchannelLogout(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
 func (a headerAuth) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sub := r.Header.Get("X-Test-User")
@@ -97,6 +100,7 @@ func newAPIWithWorker(t *testing.T, startWorker bool, opts ...func(*httpapi.Deps
 		Accounts:              acc,
 		Exports:               export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 3}, pool.Notify),
 		Audit:                 audit.New(s, nil),
+		Lifecycle:             account.NewLifecycle(s, blobs, audit.New(s, nil), account.LogNotifier{}),
 		AuditLog:              s,
 		Ready:                 s.Ping,
 		PublicURL:             pub,

@@ -34,6 +34,9 @@ type Server struct {
 	Requests atomic.Int64
 	// FailNext makes the next N requests return 503 (to test retries).
 	FailNext atomic.Int32
+	// TokenExpiry, when set, is reported by the personal access token API
+	// for the token's id (Data Center tokens encode "<id>:<secret>").
+	TokenExpiry string
 }
 
 func New(token string) *Server {
@@ -79,6 +82,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.URL.Path
 	switch {
+	case strings.HasPrefix(p, "/rest/pat/latest/tokens/"):
+		if s.TokenExpiry == "" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, map[string]any{"id": strings.TrimPrefix(p, "/rest/pat/latest/tokens/"), "name": "export", "expiringAt": s.TokenExpiry})
 	case p == "/rest/api/user/current":
 		writeJSON(w, map[string]string{"username": "jdoe", "displayName": "John Doe"})
 	case p == "/rest/api/content/search":

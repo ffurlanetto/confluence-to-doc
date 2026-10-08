@@ -50,8 +50,15 @@ type Config struct {
 	OIDC OIDCConfig
 
 	SessionTTL time.Duration
+	// SessionRevalidateInterval is how often a session is re-checked with
+	// the identity provider (0 = never).
+	SessionRevalidateInterval time.Duration
 	// AuditRetention is how long audit events are kept in the database.
 	AuditRetention time.Duration
+	// AccountRetention deletes accounts unused for that long (0 = never),
+	// warning their owner AccountDeletionNotice beforehand.
+	AccountRetention      time.Duration
+	AccountDeletionNotice time.Duration
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For header is
 	// believed when recording a client's address. Empty trusts nobody.
 	TrustedProxies []netip.Prefix
@@ -140,6 +147,9 @@ type ExportConfig struct {
 	JanitorInterval   time.Duration
 	SofficePath       string
 	ConfluenceWorkers int
+	// Language is the documents' default language, a BCP 47 tag; empty keeps
+	// the Word template's (or en-US).
+	Language string
 	// WordTemplatePath points at a company Word template (.docx/.dotx)
 	// applied to every generated document. Empty means default styling.
 	WordTemplatePath string
@@ -157,6 +167,9 @@ const defaultClassifications = "Public, Internal, Confidential:watermark, Restri
 
 // maxClassificationLabel keeps the label printable in a footer and a watermark.
 const maxClassificationLabel = 40
+
+// languageTag accepts the usual BCP 47 shapes: fr, fr-FR, zh-Hant-TW.
+var languageTag = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
 
 // minAuditRetention keeps an investigation possible: a security incident is
 // often noticed weeks after the fact.
@@ -198,15 +211,18 @@ func load(getenv func(string) string) (*Config, error) {
 			GroupsClaim:  e.str("OIDC_GROUPS_CLAIM", "groups"),
 			AdminGroups:  e.csv("OIDC_ADMIN_GROUPS"),
 		},
-		SessionTTL:          e.duration("SESSION_TTL", 12*time.Hour),
-		AuditRetention:      e.duration("AUDIT_RETENTION", 365*24*time.Hour),
-		TrustedProxies:      e.prefixes("TRUSTED_PROXIES"),
-		ConfluenceTimeout:   e.duration("CONFLUENCE_TIMEOUT", 30*time.Second),
-		ConfluenceRateLimit: e.float("CONFLUENCE_RATE_LIMIT", 10),
-		ConfluenceRateBurst: e.int("CONFLUENCE_RATE_BURST", 20),
-		APIRateLimit:        e.int("API_RATE_LIMIT", 300),
-		APIRateBurst:        e.int("API_RATE_BURST", 60),
-		AuthRateLimit:       e.int("AUTH_RATE_LIMIT", 30),
+		SessionTTL:                e.duration("SESSION_TTL", 12*time.Hour),
+		SessionRevalidateInterval: e.duration("SESSION_REVALIDATE_INTERVAL", 15*time.Minute),
+		AuditRetention:            e.duration("AUDIT_RETENTION", 365*24*time.Hour),
+		AccountRetention:          e.duration("ACCOUNT_RETENTION", 180*24*time.Hour),
+		AccountDeletionNotice:     e.duration("ACCOUNT_DELETION_NOTICE", 15*24*time.Hour),
+		TrustedProxies:            e.prefixes("TRUSTED_PROXIES"),
+		ConfluenceTimeout:         e.duration("CONFLUENCE_TIMEOUT", 30*time.Second),
+		ConfluenceRateLimit:       e.float("CONFLUENCE_RATE_LIMIT", 10),
+		ConfluenceRateBurst:       e.int("CONFLUENCE_RATE_BURST", 20),
+		APIRateLimit:              e.int("API_RATE_LIMIT", 300),
+		APIRateBurst:              e.int("API_RATE_BURST", 60),
+		AuthRateLimit:             e.int("AUTH_RATE_LIMIT", 30),
 		Export: ExportConfig{
 			StorageDir:        e.str("EXPORT_STORAGE_DIR", "./data/exports"),
 			Retention:         e.duration("EXPORT_RETENTION", 48*time.Hour),
@@ -221,6 +237,7 @@ func load(getenv func(string) string) (*Config, error) {
 			SofficePath:       e.str("SOFFICE_PATH", "soffice"),
 			ConfluenceWorkers: e.int("CONFLUENCE_FETCH_CONCURRENCY", 4),
 			WordTemplatePath:  e.str("WORD_TEMPLATE_PATH", ""),
+			Language:          e.str("DOCUMENT_LANGUAGE", ""),
 			Classification:    e.str("DOCUMENT_CLASSIFICATION", ""),
 			Classifications:   e.classifications("DOCUMENT_CLASSIFICATIONS", defaultClassifications),
 		},
@@ -275,11 +292,17 @@ func (c *Config) validate() error {
 	if c.Export.Retention <= 0 {
 		errs = append(errs, errors.New("EXPORT_RETENTION must be > 0"))
 	}
+	if l := c.Export.Language; l != "" && !languageTag.MatchString(l) {
+		errs = append(errs, fmt.Errorf("DOCUMENT_LANGUAGE: %q is not a language tag such as en-GB or fr-FR", l))
+	}
 	if c.ConfluenceRateLimit < 0 || c.APIRateLimit < 0 || c.AuthRateLimit < 0 {
 		errs = append(errs, errors.New("CONFLUENCE_RATE_LIMIT, API_RATE_LIMIT and AUTH_RATE_LIMIT must be >= 0 (0 disables the limit)"))
 	}
 	if c.ConfluenceRateBurst < 1 || c.APIRateBurst < 1 {
 		errs = append(errs, errors.New("CONFLUENCE_RATE_BURST and API_RATE_BURST must be >= 1"))
+	}
+	if c.AccountRetention < 0 || (c.AccountRetention > 0 && (c.AccountDeletionNotice <= 0 || c.AccountDeletionNotice >= c.AccountRetention)) {
+		errs = append(errs, errors.New("ACCOUNT_DELETION_NOTICE must be > 0 and shorter than ACCOUNT_RETENTION (0 keeps accounts forever)"))
 	}
 	if c.AuditRetention < minAuditRetention {
 		errs = append(errs, fmt.Errorf("AUDIT_RETENTION must be at least %s", minAuditRetention))

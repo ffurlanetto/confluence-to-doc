@@ -34,17 +34,29 @@ type User struct {
 	// login (OIDC_ADMIN_GROUPS); it is never set through the API.
 	IsAdmin   bool
 	CreatedAt time.Time
+	// LastActiveAt is the last sign-in, or the creation for an account that
+	// never signed in again. Only filled where it is needed.
+	LastActiveAt time.Time
 }
 
 type Session struct {
 	UserID    uuid.UUID
 	ExpiresAt time.Time
+	// SID is the identity provider's session id, which a back-channel
+	// logout names; empty when the provider gives none.
+	SID string
+	// RefreshToken is the encrypted OAuth refresh token used to re-check the
+	// account with the provider at RevalidateAt (nil: no re-check possible).
+	RefreshToken []byte
+	RevalidateAt *time.Time
 }
 
 type Preferences struct {
-	UserID        uuid.UUID
-	EncryptedPAT  []byte
-	PATUpdatedAt  *time.Time
+	UserID       uuid.UUID
+	EncryptedPAT []byte
+	PATUpdatedAt *time.Time
+	// PATExpiresAt is when the token stops working, if Confluence said.
+	PATExpiresAt  *time.Time
 	DefaultFormat Format
 }
 
