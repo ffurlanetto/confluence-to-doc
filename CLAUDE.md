@@ -84,7 +84,9 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 4. Every export query filters on `user_id` (ownership): another user's export must look like a 404.
 5. State-changing requests require the `X-CSRF-Protection: 1` header and a same-origin `Origin`.
 6. Sessions: opaque random token in an HttpOnly SameSite=Lax cookie; only its SHA-256 is stored.
-7. Content from Confluence is sanitised (`exporter.droppedElements`, event handlers stripped) before conversion.
+7. Content from Confluence is sanitised (`exporter.droppedElements`, event handlers stripped) before conversion,
+   and nothing in the HTML may make LibreOffice load a resource: only `data:` images, no `url()`, no media
+   (`exporter.loadingAttributes`). LibreOffice runs with its HTTP proxy pointed at nothing (`converter.isolatedEnv`).
 8. Security-relevant actions are recorded through the `Auditor` (`internal/audit`): a new endpoint that changes
    state, reveals a document or touches credentials records an event. Events never contain secrets or content.
 9. `/api/admin/*` routes sit behind `requireAdmin`; the admin flag comes from the IdP groups only.

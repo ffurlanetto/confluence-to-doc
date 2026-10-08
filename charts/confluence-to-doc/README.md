@@ -61,6 +61,14 @@ the values below map onto it.
 | `encryptionKey` **or** `existingEncryptionKeySecret` | 32 random bytes, base64                  |
 | `storage.s3.bucket` (when `storage.type: s3`) | Bucket for generated documents              |
 
+### Network policies
+
+`networkPolicy.enabled: true` installs a default-deny policy per component: the API accepts connections
+from `networkPolicy.ingressFrom` (the ingress controller) only, workers accept none, and both may reach DNS
+and the destinations listed in `networkPolicy.egress` — Confluence, PostgreSQL, the identity provider,
+object storage, the telemetry collector — and nothing else. It needs a network plugin that enforces
+NetworkPolicies. [values-production.yaml](values-production.yaml) has an example.
+
 ### Administrators and audit
 
 `oidc.adminGroups` lists the groups (or roles, with `oidc.groupsClaim: roles`) whose members see the

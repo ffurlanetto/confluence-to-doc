@@ -153,6 +153,11 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
 - **Audit trail** — security-relevant actions are recorded in an append-only table and as structured log
   lines for the SIEM (`internal/audit`, ADR 0008).
 - **Headers** — strict CSP (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, HSTS over HTTPS.
+- **Conversion isolation** — LibreOffice fetches whatever an imported HTML document points at. The renderer
+  therefore removes every reference that loads something (remote images, stylesheets, backgrounds, media,
+  `url()` in styles…: only inlined `data:` images survive), and the LibreOffice process runs with its HTTP
+  traffic sent to a proxy that does not exist, so a reference that slipped through fails instead of
+  reaching the network. In Kubernetes, NetworkPolicies limit the pods to the services they use (ADR 0010).
 - **Files** — storage keys are generated and validated server-side (no path traversal), written
   atomically, and served as `Content-Disposition: attachment`.
 

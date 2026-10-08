@@ -71,6 +71,8 @@ name and carries over the ones it cannot match.
 | Status lozenges, emoticons | ✅ the underlying span or image is kept |
 | Entities, accents, `&nbsp;` | ✅ |
 | `<script>`, `<iframe>`, `<form>`, `<button>`, event handlers | ✅ removed before conversion, on purpose |
+| `<video>`, `<audio>`, `<svg>`, `<source>`, `<base>`; `srcset`, `background`, `poster`; `url()` in a `style` | ✅ removed before conversion: LibreOffice would fetch them from the worker's network (ADR 0010) |
+| Image that is not a Confluence attachment | ✅ replaced by its alternative text: only images fetched from Confluence are inlined |
 
 ## Document properties
 

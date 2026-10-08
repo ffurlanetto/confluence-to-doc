@@ -252,6 +252,25 @@ securityContext:
   # LibreOffice only writes to /tmp and $HOME, both mounted as emptyDir.
   readOnlyRootFilesystem: true
 
+# -- NetworkPolicies: deny everything, then allow what the application needs.
+# Requires a network plugin that enforces them (Calico, Cilium...).
+networkPolicy:
+  enabled: false
+  # -- Who may reach the API pods on port 8080: the ingress controller, typically.
+  # Worker pods accept no connection at all (kubelet probes are not affected
+  # by most network plugins).
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  # -- Allow DNS lookups to kube-dns in any namespace.
+  allowDNS: true
+  # -- Egress rules (NetworkPolicyEgressRule) for every destination the pods
+  # use: Confluence, PostgreSQL, the identity provider, object storage and the
+  # telemetry collector. Outside the cluster these are CIDR blocks; nothing
+  # else is reachable.
+  egress: []
+
 # Scratch space for LibreOffice; an export is written here before it is stored.
 tmpVolume:
   sizeLimit: 2Gi

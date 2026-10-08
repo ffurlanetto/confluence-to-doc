@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -555,5 +558,52 @@ func TestMarkingReachesBothFormats(t *testing.T) {
 				t.Fatalf("footer line found %d times in the PDF, want once per page:\n%s", n, text)
 			}
 		})
+	}
+}
+
+// TestLibreOfficeReachesNoNetwork feeds LibreOffice HTML the renderer would
+// never produce — remote stylesheet, image, background — and checks that no
+// request leaves the conversion: the second line of defence must hold on its
+// own, even if the HTML sanitisation missed something.
+func TestLibreOfficeReachesNoNetwork(t *testing.T) {
+	requireSoffice(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		t.Logf("LibreOffice requested %s %s", r.Method, r.URL)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	html := `<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="` + srv.URL + `/style.css"></head><body>` +
+		`<p>remote</p><img src="` + srv.URL + `/image.png">` +
+		`<table background="` + srv.URL + `/table.png"><tr><td>cell</td></tr></table></body></html>`
+
+	// The server process's own proxy settings must not leak into LibreOffice.
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("no_proxy", "*")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var out bytes.Buffer
+	if err := (LibreOffice{}).Convert(ctx, []byte(html), domain.FormatPDF, docx.Marking{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("LibreOffice made %d request(s) during the conversion", n)
+	}
+}
+
+func TestIsolatedEnv(t *testing.T) {
+	env := isolatedEnv([]string{"PATH=/usr/bin", "HTTPS_PROXY=http://corp:3128", "no_proxy=.corp", "HOME=/root", "LANG=C"}, "/work")
+	got := strings.Join(env, " ")
+	for _, want := range []string{"PATH=/usr/bin", "LANG=C", "HTTPS_PROXY=" + blackhole, "https_proxy=" + blackhole, "http_proxy=" + blackhole, "no_proxy= ", "HOME=/work"} {
+		if !strings.Contains(got+" ", want) {
+			t.Errorf("env lacks %q: %s", want, got)
+		}
+	}
+	for _, leaked := range []string{"corp", "HOME=/root"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("env leaks %q: %s", leaked, got)
+		}
 	}
 }

@@ -123,7 +123,7 @@ func (l LibreOffice) run(ctx context.Context, work, source string, format domain
 	args = append(args, "--convert-to", filters[format], "--outdir", outDir, source)
 
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = append(os.Environ(), "HOME="+work)
+	cmd.Env = isolatedEnv(os.Environ(), work)
 	var output bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Run(); err != nil {
@@ -142,6 +142,33 @@ func (l LibreOffice) run(ctx context.Context, work, source string, format domain
 		return nil, errors.New("soffice produced an empty document")
 	}
 	return data, nil
+}
+
+// blackhole is where LibreOffice's HTTP traffic goes: the discard port on the
+// loopback interface, where nothing listens.
+const blackhole = "http://127.0.0.1:9"
+
+// isolatedEnv is the environment of a LibreOffice process. LibreOffice
+// fetches the stylesheets, images and other resources an imported HTML
+// document points at; the renderer removes every such reference, and this is
+// the second line: all of LibreOffice's HTTP(S) traffic is sent to a proxy
+// that does not exist, so a reference that slipped through fails instead of
+// reaching the network. The proxy settings of the server process itself (its
+// way to Confluence or S3) are deliberately not inherited.
+func isolatedEnv(parent []string, home string) []string {
+	env := make([]string, 0, len(parent)+8)
+	for _, kv := range parent {
+		name, _, _ := strings.Cut(kv, "=")
+		switch strings.ToLower(name) {
+		case "http_proxy", "https_proxy", "all_proxy", "no_proxy", "ftp_proxy", "home":
+			continue
+		}
+		env = append(env, kv)
+	}
+	for _, name := range []string{"http_proxy", "https_proxy", "all_proxy", "ftp_proxy"} {
+		env = append(env, name+"="+blackhole, strings.ToUpper(name)+"="+blackhole)
+	}
+	return append(env, "no_proxy=", "NO_PROXY=", "HOME="+home)
 }
 
 func copyOut(data []byte, dst io.Writer) error {

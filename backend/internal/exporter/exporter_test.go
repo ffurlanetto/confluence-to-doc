@@ -307,3 +307,41 @@ func TestRenderKeepsMarkupLibreOfficeWouldSwallow(t *testing.T) {
 		}
 	}
 }
+
+// hostileBody names remote resources in every way HTML and CSS allow. Page
+// authors control Confluence content, and LibreOffice fetches what the HTML
+// it imports points at: none of these may reach the converter.
+const hostileBody = `<p style="color: red; background-image: url(http://evil.test/bg.png)">styled</p>
+<p style="background: URL( 'http://evil.test/a' ); font-weight: bold">upper-case url</p>
+<p style="background:u\72l(http://evil.test/escaped)">escaped</p>
+<div style="@import 'http://evil.test/i.css'">import</div>
+<table background="http://evil.test/table.png"><tr><td background="http://evil.test/cell.png">cell</td></tr></table>
+<img srcset="http://evil.test/1x.png 1x" src="http://evil.test/remote.png" alt="remote">
+<img src="file:///etc/passwd" alt="local file">
+<video src="http://evil.test/v.mp4" poster="http://evil.test/poster.png"></video>
+<audio src="http://evil.test/a.mp3"></audio>
+<picture><source srcset="http://evil.test/p.webp"><img src="data:image/png;base64,iVBORw0KGgo=" alt="kept"></picture>
+<svg><image href="http://evil.test/svg.png"/></svg>
+<input type="image" src="http://evil.test/input.png">
+<base href="http://evil.test/">
+<blockquote cite="http://evil.test/cite">quote</blockquote>
+<span src="http://evil.test/span" href="http://evil.test/span-href">span</span>
+<a href="https://example.com/doc" ping="http://evil.test/ping">a link stays a link</a>`
+
+func TestRenderLoadsNothingRemote(t *testing.T) {
+	root := &exporter.Node{Page: confluence.Page{PageSummary: confluence.PageSummary{ID: "1", Title: "R"}, BodyHTML: hostileBody}}
+	out, err := exporter.RenderHTML(context.Background(), root, exporter.RenderOptions{Title: "R"}, failingAssets{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(out)
+	if strings.Contains(doc, "evil.test") || strings.Contains(doc, "file:") {
+		t.Errorf("a remote reference survived:\n%s", doc)
+	}
+	for _, kept := range []string{"styled", `style="color: red; page-break-inside: avoid"`, "font-weight: bold", "cell", "quote", "[remote]", "[local file]",
+		`src="data:image/png;base64,iVBORw0KGgo="`, `href="https://example.com/doc"`, "a link stays a link"} {
+		if !strings.Contains(doc, kept) {
+			t.Errorf("legitimate content lost: %q", kept)
+		}
+	}
+}

@@ -57,6 +57,20 @@ Only `vMAJOR.MINOR.PATCH` tags publish a release; anything else is ignored. A pr
   gh attestation verify oci://ghcr.io/ffurlanetto/confluence-to-doc:1.2.3 --repo ffurlanetto/confluence-to-doc
   ```
 
+- A **software bill of materials** (SPDX JSON, every Debian package, LibreOffice and Go module in the image)
+  is generated from the published image, attested and pushed next to it, and kept as a workflow artifact.
+  When a vulnerability is announced, it tells whether a given release ships the affected version:
+
+  ```bash
+  gh attestation verify oci://ghcr.io/ffurlanetto/confluence-to-doc:1.2.3 --repo ffurlanetto/confluence-to-doc \
+    --predicate-type https://spdx.dev/Document/v2.3
+  ```
+
+  The SBOM is produced for the runner's architecture (amd64); the arm64 image is built from the same
+  Dockerfile and package versions.
+- Pull requests already fail on any fixable *high* or *critical* vulnerability in the image (Trivy, in CI),
+  and the Dockerfile upgrades the base packages, so a release does not knowingly ship one.
+
 ## First release
 
 The package is created private. After the first successful run, make it public in the repository's
