@@ -4,7 +4,7 @@ Default deny, then exactly the traffic the application needs. The API pods
 accept requests from the ingress controller only; worker pods accept nothing.
 Both may resolve names and reach the destinations listed in
 networkPolicy.egress — Confluence, PostgreSQL, the identity provider, object
-storage, the telemetry collector — and nowhere else, so a document that tried
+storage, the telemetry collector, the SMTP relay and Teams — and nowhere else, so a document that tried
 to make LibreOffice fetch something would find no route out either.
 */ -}}
 {{- range $component := list "api" "worker" }}

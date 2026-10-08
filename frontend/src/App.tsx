@@ -4,6 +4,10 @@ import { isUnauthenticated } from './api/client';
 import { useMe } from './api/hooks';
 import { Layout } from './components/Layout';
 import { AdminAuditPage } from './pages/AdminAuditPage';
+import { AdminQueuePage } from './pages/AdminQueuePage';
+import { AdminTemplatePage } from './pages/AdminTemplatePage';
+import { AdminUsagePage } from './pages/AdminUsagePage';
+import { AdminUsersPage } from './pages/AdminUsersPage';
 import { ExportsPage } from './pages/ExportsPage';
 import { LoginPage } from './pages/LoginPage';
 import { NewExportPage } from './pages/NewExportPage';
@@ -30,7 +34,16 @@ export function App() {
         <Route path="/new" element={<NewExportPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
-        {me.data.isAdmin && <Route path="/admin/audit" element={<AdminAuditPage />} />}
+        {me.data.isAdmin && (
+          <>
+            <Route path="/admin" element={<Navigate to="/admin/queue" replace />} />
+            <Route path="/admin/queue" element={<AdminQueuePage />} />
+            <Route path="/admin/users" element={<AdminUsersPage />} />
+            <Route path="/admin/usage" element={<AdminUsagePage />} />
+            <Route path="/admin/template" element={<AdminTemplatePage />} />
+            <Route path="/admin/audit" element={<AdminAuditPage />} />
+          </>
+        )}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

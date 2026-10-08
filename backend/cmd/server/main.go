@@ -18,11 +18,13 @@ import (
 	"time"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/admin"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/config"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/converter"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/doctemplate"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
@@ -131,12 +133,14 @@ func run() error {
 	} else {
 		slog.Info("document template: built-in styling")
 	}
+	// An administrator may upload another one, which then takes precedence.
+	templates := doctemplate.New(db, template)
 
 	var wg sync.WaitGroup
 	var wakeWorkers func()
 
 	if cfg.Role.RunsWorker() {
-		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Template: template, Language: cfg.Export.Language}
+		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Language: cfg.Export.Language}
 		pool := export.NewPool(db, accounts, conv, blobs, export.WorkerConfig{
 			Concurrency:       cfg.Export.WorkerConcurrency,
 			PollInterval:      cfg.Export.PollInterval,
@@ -146,7 +150,7 @@ func run() error {
 			MaxPages:          cfg.Export.MaxPages,
 			MaxImageBytes:     cfg.Export.MaxImageBytes,
 			ConfluenceWorkers: cfg.Export.ConfluenceWorkers,
-			UseTemplateStyles: template != nil,
+			Templates:         templates,
 			Classification:    cfg.Export.Classification,
 			Classifications:   cfg.Export.Classifications,
 			ShutdownGrace:     20 * time.Second,
@@ -190,6 +194,8 @@ func run() error {
 			Lifecycle:             lifecycle,
 			Notifications:         notifications,
 			AuditLog:              db,
+			Admin:                 admin.NewService(db, notifications, cfg.Export.Retention, wakeWorkers),
+			Templates:             templates,
 			TrustedProxies:        cfg.TrustedProxies,
 			UserLimiter:           keyedLimiter(cfg.APIRateLimit, cfg.APIRateBurst),
 			AuthLimiter:           keyedLimiter(cfg.AuthRateLimit, max(cfg.AuthRateLimit/3, 1)),
@@ -198,7 +204,6 @@ func run() error {
 			StaticDir:             cfg.StaticDir,
 			Retention:             cfg.Export.Retention,
 			MaxPages:              cfg.Export.MaxPages,
-			DocumentTemplate:      templateName(template),
 			Classifications:       cfg.Export.Classifications,
 			DefaultClassification: cfg.Export.Classification,
 		})
@@ -286,14 +291,6 @@ func writeStatus(w http.ResponseWriter, code int, status string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_, _ = fmt.Fprintf(w, `{"status":%q}`, status)
-}
-
-// templateName is the template file name shown in the API, empty when none.
-func templateName(t *docx.Template) string {
-	if t == nil {
-		return ""
-	}
-	return t.Name()
 }
 
 // keyedLimiter returns nil, meaning no limit, when perMinute is 0. The

@@ -110,8 +110,9 @@ Every element's fate is recorded in [html-mapping.md](html-mapping.md).
 
 ### Company Word template
 
-When `WORD_TEMPLATE_PATH` is set, the document is produced inside the corporate template
-(`internal/docx`): the template package is the base of the result — including its colour and font theme —
+When a template is in use — uploaded by an administrator (kept in PostgreSQL), else `WORD_TEMPLATE_PATH` —
+the document is produced inside the corporate template (`internal/docx`; `internal/doctemplate` picks the
+template once per export, from a checksum, and caches it parsed, ADR 0014): the template package is the base of the result — including its colour and font theme —
 and only the generated body is injected into it, with images, hyperlinks, list numbering and style
 references remapped to stay valid. Style references are resolved against the template by id and then by
 style **name**, because LibreOffice and Word give the same style different ids.
@@ -159,6 +160,9 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
   admin role, granted by the identity provider's groups at each sign-in (ADR 0008).
 - **Audit trail** — security-relevant actions are recorded in an append-only table and as structured log
   lines for the SIEM (`internal/audit`, ADR 0008).
+- **Administration** — the console's actions (`internal/admin`: cancel, retry, block, usage; template
+  upload) are audited, reading included. A blocked account resolves no session and cannot sign in. Uploaded
+  templates are refused if they carry macros, ActiveX or anything that loads external content (ADR 0014).
 - **Headers** — strict CSP (`default-src 'self'`), `frame-ancestors 'none'`, `nosniff`, HSTS over HTTPS.
 - **Conversion isolation** — LibreOffice fetches whatever an imported HTML document points at. The renderer
   therefore removes every reference that loads something (remote images, stylesheets, backgrounds, media,
@@ -175,7 +179,8 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
 - OpenTelemetry traces and metrics pushed over OTLP, enabled by `OTEL_EXPORTER_OTLP_ENDPOINT`
   (see [configuration](configuration.md#telemetry-opentelemetry)). An HTTP request is one trace; an export
   job is another, with a span per pipeline stage — crawl, render, convert — and one per Confluence call.
-  Metrics cover the queue depth, export outcomes, durations and sizes.
+  Metrics cover the queue depth, export outcomes (with the cause of a failure: user or system), durations
+  and sizes. Alert rules, a dashboard and service level objectives are in [operations/](operations/README.md).
 - Log lines emitted inside a span carry `trace_id` and `span_id`, which links the three signals.
 
 ## Possible next steps
@@ -184,5 +189,5 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
   (a migration and a span link); today the export id is the connection between the two traces.
 
 - Confluence Cloud: email + API token (Basic) authentication alongside the Bearer PAT.
-- Export completion notifications (email, SSE); `LISTEN/NOTIFY` to wake remote workers.
+- `LISTEN/NOTIFY` to wake remote workers.
 - Per-user or per-space template selection, on top of the current global template.

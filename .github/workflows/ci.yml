@@ -88,12 +88,70 @@ jobs:
             https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp
           /tmp/kubeconform -strict -summary /tmp/rendered.yaml
+      - name: Check the alert rules and the dashboard
+        run: |
+          curl -sSL -o /tmp/prometheus.tar.gz \
+            https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz
+          tar -xzf /tmp/prometheus.tar.gz -C /tmp
+          PATH="/tmp/prometheus-3.5.0.linux-amd64:$PATH" make check-alerts
+          helm template c2d charts/confluence-to-doc -f charts/confluence-to-doc/values-production.yaml \
+            --set monitoring.grafanaDashboard.enabled=true --show-only templates/grafana-dashboard.yaml \
+            | yq -r '.data["confluence-to-doc.json"]' | jq -e '.panels | length > 0'
       - name: Reject an install that is missing its required values
         run: |
           if helm template c2d charts/confluence-to-doc >/dev/null 2>&1; then
             echo "the chart rendered without the values it cannot work without" >&2
             exit 1
           fi
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: c2d
+          POSTGRES_PASSWORD: c2d
+          POSTGRES_DB: c2d
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U c2d" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      E2E_ADMIN_DATABASE_URL: postgres://c2d:c2d@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+      - name: Install LibreOffice and the PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libreoffice-writer-nogui fonts-liberation postgresql-client
+      - name: Build the SPA
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Install Playwright
+        working-directory: e2e
+        run: npm ci && npm run typecheck && npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        working-directory: e2e
+        run: npx playwright test
+      - name: Keep the report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
 
   docker:
     runs-on: ubuntu-latest

@@ -1,6 +1,7 @@
 package export_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -37,11 +38,15 @@ import (
 // was asked to stamp, which lets tests assert on both without LibreOffice.
 type htmlConverter struct{ fail error }
 
-func (c htmlConverter) Convert(_ context.Context, html []byte, _ domain.Format, m docx.Marking, dst io.Writer) error {
+func (c htmlConverter) Convert(_ context.Context, html []byte, _ domain.Format, tpl *docx.Template, m docx.Marking, dst io.Writer) error {
 	if c.fail != nil {
 		return c.fail
 	}
-	_, err := fmt.Fprintf(dst, "%s\nFOOTER: %s\nWATERMARK: %s\n", html, m.Footer, m.Watermark)
+	name := "built-in"
+	if tpl != nil {
+		name = tpl.Name()
+	}
+	_, err := fmt.Fprintf(dst, "%s\nFOOTER: %s\nWATERMARK: %s\nTEMPLATE: %s\n", html, m.Footer, m.Watermark, name)
 	return err
 }
 
@@ -393,5 +398,93 @@ func TestRequesterIsNotified(t *testing.T) {
 	}
 	if len(notifier.failed) != 1 || !strings.Contains(notifier.failed[0], "cannot be found") {
 		t.Errorf("failed: %v", notifier.failed)
+	}
+}
+
+// templateSource hands out a fixed template, or an error.
+type templateSource struct {
+	tpl *docx.Template
+	err error
+}
+
+func (s templateSource) Current(context.Context) (*docx.Template, error) { return s.tpl, s.err }
+
+func companyTemplate(t *testing.T) *docx.Template {
+	t.Helper()
+	const w = `xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"`
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range map[string]string{
+		"[Content_Types].xml":          `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>`,
+		"word/document.xml":            `<w:document ` + w + `><w:body><w:sectPr/></w:body></w:document>`,
+		"word/_rels/document.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
+		"word/styles.xml":              `<w:styles ` + w + `/>`,
+	} {
+		f, _ := zw.Create(name)
+		_, _ = f.Write([]byte(content))
+	}
+	_ = zw.Close()
+	tpl, err := docx.ParseTemplate("ACME.dotx", buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tpl
+}
+
+func TestExportUsesTheTemplateInUse(t *testing.T) {
+	for name, tc := range map[string]struct {
+		source     templateSource
+		status     domain.ExportStatus
+		inDocument string
+		message    string
+	}{
+		"uploaded template": {templateSource{tpl: companyTemplate(t)}, domain.StatusSucceeded, "TEMPLATE: ACME.dotx", ""},
+		"built-in styling":  {templateSource{}, domain.StatusSucceeded, "TEMPLATE: built-in", ""},
+		"unusable template": {templateSource{err: docx.ErrApply}, domain.StatusFailed, "", "Word template could not be applied"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, htmlConverter{})
+			e.pool = export.NewPool(e.store, e.account, htmlConverter{}, e.blobs, export.WorkerConfig{
+				Concurrency: 1, PollInterval: 20 * time.Millisecond, JobTimeout: time.Minute, Lease: 3 * time.Second,
+				Retention: time.Hour, MaxPages: 10, MaxImageBytes: 1 << 20, ConfluenceWorkers: 2, Templates: tc.source,
+			})
+			ctx := context.Background()
+			if _, err := e.account.SetPAT(ctx, e.user.ID, "pat"); err != nil {
+				t.Fatal(err)
+			}
+			runPool(t, e.pool)
+			job, _ := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "1", Format: domain.FormatDOCX})
+			done := e.waitFor(t, job.ID, domain.StatusSucceeded, domain.StatusFailed)
+			if done.Status != tc.status || !strings.Contains(done.Error, tc.message) {
+				t.Fatalf("export = %s %q, want %s %q", done.Status, done.Error, tc.status, tc.message)
+			}
+			if tc.inDocument == "" {
+				return
+			}
+			_, rc, err := e.svc.Open(ctx, job.ID, e.user.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rc.Close()
+			body, _ := io.ReadAll(rc)
+			if !strings.Contains(string(body), tc.inDocument) {
+				t.Fatalf("document does not say %q", tc.inDocument)
+			}
+		})
+	}
+}
+
+func TestFailureCause(t *testing.T) {
+	for err, want := range map[error]string{
+		domain.ErrPATMissing:                             "user",
+		fmt.Errorf("crawl: %w", confluence.ErrForbidden): "user",
+		exporter.ErrTooManyPages:                         "user",
+		docx.ErrApply:                                    "system",
+		context.DeadlineExceeded:                         "system",
+		errors.New("soffice crashed"):                    "system",
+	} {
+		if got := export.FailureCause(err); got != want {
+			t.Errorf("FailureCause(%v) = %s, want %s", err, got, want)
+		}
 	}
 }

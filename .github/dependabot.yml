@@ -14,6 +14,11 @@ updates:
         update-types: ["version-update:semver-major"]
     groups:
       npm-deps: { patterns: ["*"] }
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule: { interval: monthly }
+    groups:
+      e2e-deps: { patterns: ["*"] }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }

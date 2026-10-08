@@ -124,3 +124,47 @@ export interface Inbox {
   notifications: AppNotification[];
   unread: number;
 }
+
+/** An export in the administration queue: any user's, with its owner. */
+export interface AdminExport extends Export {
+  ownerId: string;
+  ownerEmail?: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+  createdAt: string;
+  lastActiveAt: string;
+  blockedAt?: string;
+  blockedReason?: string;
+  activeExports: number;
+  totalExports: number;
+}
+
+export interface Usage {
+  from: string;
+  succeeded: number;
+  failed: number;
+  pages: number;
+  bytes: number;
+  users: number;
+  byFormat: Partial<Record<ExportFormat, number>>;
+  daily: { day: string; succeeded: number; failed: number }[];
+  topUsers: { userId: string; email: string; exports: number; pages: number }[];
+}
+
+/** The company Word template documents are produced with. */
+export interface TemplateInfo {
+  origin: 'uploaded' | 'configured' | 'none';
+  name?: string;
+  defaultParagraphStyle?: string;
+  styles: number;
+  uploadedAt?: string;
+  uploadedBy?: string;
+  /** The template configured on the server, which applies when none is uploaded. */
+  configured?: string;
+  maxBytes: number;
+}

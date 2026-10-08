@@ -20,3 +20,4 @@ node_modules/
 .vscode/*
 !.vscode/extensions.json
 .DS_Store
+charts/confluence-to-doc/tests/rules.yaml

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Page struct {
@@ -37,6 +38,9 @@ type Server struct {
 	// TokenExpiry, when set, is reported by the personal access token API
 	// for the token's id (Data Center tokens encode "<id>:<secret>").
 	TokenExpiry string
+	// Latency delays every answer, to load-test against a Confluence about
+	// as slow as a real one. Set it before serving.
+	Latency time.Duration
 }
 
 func New(token string) *Server {
@@ -70,6 +74,13 @@ func (s *Server) AddAttachment(name string, data []byte) {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.Requests.Add(1)
+	if s.Latency > 0 {
+		select {
+		case <-time.After(s.Latency):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	if s.FailNext.Load() > 0 {
 		s.FailNext.Add(-1)
 		w.Header().Set("Retry-After", "0")

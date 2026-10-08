@@ -1,7 +1,13 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 
 import { api } from './client';
-import type { AuditFilter, CreateExportRequest, Export, ExportFormat } from './types';
+import type { AuditFilter, CreateExportRequest, Export, ExportFormat, ExportStatus } from './types';
 
 export const queryKeys = {
   me: ['me'] as const,
@@ -11,6 +17,10 @@ export const queryKeys = {
   children: (id: string) => ['children', id] as const,
   audit: (filter: AuditFilter) => ['audit', filter] as const,
   notifications: ['notifications'] as const,
+  adminQueue: (statuses: ExportStatus[]) => ['admin', 'queue', statuses] as const,
+  adminUsers: (q: string) => ['admin', 'users', q] as const,
+  usage: (days: number) => ['admin', 'usage', days] as const,
+  template: ['admin', 'template'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: queryKeys.me, queryFn: api.me, staleTime: Infinity });
@@ -134,3 +144,56 @@ export const useDeleteTeamsWebhook = () => {
 };
 
 export const useTestTeams = () => useMutation({ mutationFn: api.testTeams });
+
+// ------------------------------------------------------------ administration
+
+/** Exports of every user; refreshed every 5 seconds while the page is open. */
+export const useAdminQueue = (statuses: ExportStatus[]) =>
+  useQuery({
+    queryKey: queryKeys.adminQueue(statuses),
+    queryFn: () => api.adminQueue(statuses),
+    refetchInterval: 5000,
+  });
+
+const useAdminMutation = <A>(fn: (arg: A) => Promise<unknown>) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin'] }),
+  });
+};
+
+export const useCancelExport = () => useAdminMutation((exportId: string) => api.cancelExport(exportId));
+export const useRetryExport = () => useAdminMutation((exportId: string) => api.retryExport(exportId));
+
+export const useAdminUsers = (q: string) =>
+  useQuery({ queryKey: queryKeys.adminUsers(q), queryFn: () => api.adminUsers(q) });
+
+export const useBlockUser = () =>
+  useAdminMutation(({ userId, reason }: { userId: string; reason: string }) => api.blockUser(userId, reason));
+export const useUnblockUser = () => useAdminMutation((userId: string) => api.unblockUser(userId));
+
+/** Usage over the last days; the previous figures stay shown while a new period loads. */
+export const useUsage = (days: number) =>
+  useQuery({
+    queryKey: queryKeys.usage(days),
+    queryFn: () => api.usage(days),
+    placeholderData: keepPreviousData,
+  });
+
+export const useTemplate = () => useQuery({ queryKey: queryKeys.template, queryFn: api.template });
+
+/** Uploading or removing the template also changes what the preferences show. */
+const useTemplateMutation = <A>(fn: (arg: A) => Promise<unknown>) => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.template });
+      await qc.invalidateQueries({ queryKey: queryKeys.preferences });
+    },
+  });
+};
+
+export const useUploadTemplate = () => useTemplateMutation((file: File) => api.uploadTemplate(file));
+export const useDeleteTemplate = () => useTemplateMutation<undefined>(() => api.deleteTemplate());

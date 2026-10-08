@@ -117,7 +117,9 @@ wordTemplate:
 
 The file is validated at startup: a template the application cannot use stops the pod instead of producing
 misformatted documents. See [docs/word-template.md](../../docs/word-template.md) — in particular, install
-the corporate fonts in the image if you care about the PDF rendering.
+the corporate fonts in the image if you care about the PDF rendering. Administrators can also upload a
+template from the console (*Administration › Word template*), which takes precedence over this one and needs
+no redeployment.
 
 ### Telemetry
 
@@ -131,6 +133,26 @@ telemetry:
 ```
 
 `resourceAttributes` is how you tag the owning application and team; it lands on every metric and span.
+
+### Alerts and dashboard
+
+With telemetry flowing to Prometheus through an OpenTelemetry collector, the chart can install the alert
+rules (a `PrometheusRule`, for the Prometheus Operator) and a Grafana dashboard (a ConfigMap for the
+dashboard sidecar):
+
+```yaml
+monitoring:
+  prometheusRule:
+    enabled: true
+    labels: { release: kube-prometheus-stack }
+  grafanaDashboard:
+    enabled: true
+```
+
+The thresholds under `monitoring.thresholds` are the [service level objectives](../../docs/operations/slo.md);
+every alert links to its [runbook](../../docs/operations/runbooks.md). `make check-alerts` validates and
+unit-tests the rules. Details, including the collector configuration and the metric names, in
+[docs/operations/monitoring.md](../../docs/operations/monitoring.md).
 
 ## Operational notes
 

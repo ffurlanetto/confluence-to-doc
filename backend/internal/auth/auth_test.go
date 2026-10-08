@@ -341,6 +341,25 @@ func TestAdminRoleIsRevokedAtNextLogin(t *testing.T) {
 	}
 }
 
+func TestBlockedAccountCannotSignIn(t *testing.T) {
+	h := newHarness(t)
+	u := h.login(t)
+	now := time.Now()
+	u.BlockedAt = &now
+	h.repo.sessions = map[string]domain.Session{}
+
+	code, body := h.get(t, "/auth/login?return_to=/done")
+	if code != http.StatusForbidden || !strings.Contains(body, "blocked") {
+		t.Fatalf("sign-in of a blocked account = %d %q, want 403", code, body)
+	}
+	if len(h.repo.sessions) != 0 {
+		t.Fatal("a session was opened for a blocked account")
+	}
+	if got := h.events.actions(); got[len(got)-1] != "auth.login:denied" {
+		t.Fatalf("audit trail = %v, want the refusal recorded", got)
+	}
+}
+
 func TestCallbackRejectsForgedState(t *testing.T) {
 	h := newHarness(t)
 	// Start a login but stop before following the IdP redirect.

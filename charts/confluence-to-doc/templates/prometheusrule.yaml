@@ -1,0 +1,127 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+{{- /*
+Alert rules for the Prometheus Operator. The application pushes OTLP (ADR 0007);
+these rules expect the metrics to reach Prometheus through an OpenTelemetry
+collector with the usual name translation: dots become underscores, counters
+gain "_total", histograms "_seconds_bucket". See docs/operations/monitoring.md.
+*/ -}}
+{{- $m := printf "%sc2d_" (.Values.telemetry.metricPrefix | replace "." "_") -}}
+{{- $sel := .Values.monitoring.selector | default (printf "job=~\"(.+/)?%s\"" .Values.telemetry.serviceName) -}}
+{{- $t := .Values.monitoring.thresholds -}}
+{{- $api := printf "%s, http_route=~\"/api/.*\"" $sel -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "confluence-to-doc.fullname" . }}
+  labels:
+    {{- include "confluence-to-doc.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: confluence-to-doc.slo
+      rules:
+        # Service level indicators, as ratios of bad events, over the windows
+        # the burn-rate alerts below need.
+        {{- range $w := list "5m" "30m" "1h" "6h" }}
+        - record: c2d:api_errors:ratio_rate{{ $w }}
+          expr: |
+            sum(rate(http_server_request_duration_seconds_count{ {{ $api }}, http_response_status_code=~"5.." }[{{ $w }}]))
+            /
+            sum(rate(http_server_request_duration_seconds_count{ {{ $api }} }[{{ $w }}]))
+        - record: c2d:export_system_failures:ratio_rate{{ $w }}
+          expr: |
+            sum(rate({{ $m }}exports_finished_total{ {{ $sel }}, c2d_export_outcome="failed", c2d_export_cause="system" }[{{ $w }}]))
+            /
+            sum(rate({{ $m }}exports_finished_total{ {{ $sel }}, c2d_export_outcome=~"succeeded|failed" }[{{ $w }}]))
+        {{- end }}
+
+    - name: confluence-to-doc.alerts
+      rules:
+        # Multi-window burn rates (Google SRE workbook): 14.4x spends 2 % of a
+        # 30-day budget in an hour, 6x spends 5 % in six hours.
+        - alert: C2DAPIErrorBudgetBurn
+          expr: |
+            (c2d:api_errors:ratio_rate1h > (14.4 * {{ $t.apiErrorBudget }}) and c2d:api_errors:ratio_rate5m > (14.4 * {{ $t.apiErrorBudget }}))
+            or
+            (c2d:api_errors:ratio_rate6h > (6 * {{ $t.apiErrorBudget }}) and c2d:api_errors:ratio_rate30m > (6 * {{ $t.apiErrorBudget }}))
+          labels:
+            severity: critical
+          annotations:
+            summary: The API is failing fast enough to exhaust its monthly error budget.
+            description: {{`'{{ $value | humanizePercentage }} of API requests return a 5xx error.'`}}
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#api-errors
+        - alert: C2DExportErrorBudgetBurn
+          expr: |
+            (c2d:export_system_failures:ratio_rate1h > (14.4 * {{ $t.exportErrorBudget }}) and c2d:export_system_failures:ratio_rate5m > (14.4 * {{ $t.exportErrorBudget }}))
+            or
+            (c2d:export_system_failures:ratio_rate6h > (6 * {{ $t.exportErrorBudget }}) and c2d:export_system_failures:ratio_rate30m > (6 * {{ $t.exportErrorBudget }}))
+          labels:
+            severity: critical
+          annotations:
+            summary: Exports fail for reasons users cannot fix, fast enough to exhaust the monthly error budget.
+            description: {{`'{{ $value | humanizePercentage }} of exports fail with a system error (conversion, template, storage, Confluence outage).'`}}
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#export-failures
+        - alert: C2DQueueBacklog
+          expr: |
+            max({{ $m }}queue_exports{ {{ $sel }}, c2d_queue_state="queued" }) > {{ $t.queueBacklog }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Exports are waiting longer than usual.
+            description: {{`'{{ $value }} exports have been waiting in the queue for 15 minutes.'`}}
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#queue-backlog
+        - alert: C2DWorkersStalled
+          expr: |
+            max({{ $m }}queue_exports{ {{ $sel }}, c2d_queue_state="queued" }) > 0
+            and
+            sum(increase({{ $m }}exports_finished_total{ {{ $sel }} }[30m])) == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: Exports are queued but no worker has finished any in 30 minutes.
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#workers-stalled
+        - alert: C2DExportsSlow
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate({{ $m }}export_duration_seconds_bucket{ {{ $sel }} }[30m]))) > {{ $t.exportP95Seconds }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: Exports take longer than usual to generate.
+            description: {{`'95 % of exports took less than {{ $value | humanizeDuration }}.'`}}
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#exports-slow
+        - alert: C2DAPISlow
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{ {{ $api }}, http_route!~".*/download|/api/admin/template" }[10m]))) > {{ $t.apiP95Seconds }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The API answers slowly.
+            description: {{`'95 % of API requests took less than {{ $value | humanizeDuration }}.'`}}
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#api-slow
+        - alert: C2DConfluenceErrors
+          expr: |
+            sum(rate(http_client_request_duration_seconds_count{ {{ $sel }}, http_response_status_code=~"429|5.." }[10m]))
+            /
+            sum(rate(http_client_request_duration_seconds_count{ {{ $sel }} }[10m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Confluence rejects or fails more than 10 % of the requests.
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#confluence-errors
+        - alert: C2DTelemetryAbsent
+          expr: |
+            absent({{ $m }}queue_exports{ {{ $sel }} })
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: No metric arrives from the application; the alerts above are blind.
+            runbook_url: {{ .Values.monitoring.runbookBaseUrl }}#telemetry-absent
+{{- end }}

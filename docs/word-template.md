@@ -1,9 +1,15 @@
 # Company Word template
 
-Set `WORD_TEMPLATE_PATH` to a `.docx` or `.dotx` file and every generated document — Word **and** PDF —
-comes out in the company format: header, footer, fonts, colours and page layout.
+Give the application a `.docx` or `.dotx` template and every generated document — Word **and** PDF — comes
+out in the company format: header, footer, fonts, colours and page layout. There are two ways:
 
-Without that variable the application keeps its built-in styling, so existing deployments are unchanged.
+- an administrator **uploads** it in the administration console (*Administration › Word template*); it
+  applies to the next exports on every instance, without a restart, and *Remove the uploaded template* goes
+  back at once;
+- the operator sets `WORD_TEMPLATE_PATH` to a file mounted in the containers.
+
+An uploaded template takes precedence; `WORD_TEMPLATE_PATH` applies when none is uploaded, and the built-in
+styling when there is neither.
 
 ## How it works
 
@@ -19,9 +25,15 @@ body of that document is then injected into the template package:
 
 Because a PDF is produced from the templated DOCX, both formats are identical in layout.
 
-The template is read and validated once, at startup: a missing or malformed file stops the process with an
-explicit error instead of failing every export later. The active template is shown on the **Preferences**
-screen and logged at startup:
+A template is validated when it is uploaded, and `WORD_TEMPLATE_PATH` at startup: a malformed file is
+refused (or stops the process) with an explicit error instead of failing every export later. So is a
+template that could make LibreOffice load something or run code — every part of it ends up in each
+document, which LibreOffice opens again to produce the PDF: macros (`.dotm`, `vbaProject.bin`), ActiveX
+controls, relationships to external content other than hyperlinks (a linked image, an attached template on
+a share), and fields that load a file or a URL (`INCLUDEPICTURE`, `INCLUDETEXT`, `LINK`, `DDE`, `IMPORT`).
+Remove them in Word and save again. Uploads are limited to 10 MB.
+
+The template in use is shown on the **Preferences** screen and in the console, and logged at startup:
 
 ```
 document template: company Word template  file=acme-template.docx default_paragraph_style=Normal styles=42
@@ -122,8 +134,13 @@ Licensing is yours to check: many corporate typefaces may not be redistributed i
 
 ## Rolling it out
 
-The template is a deployment artefact, like a configuration file: mount it into the container (volume,
-ConfigMap, secret) and point `WORD_TEMPLATE_PATH` at it.
+**From the console**: upload it, export the [reference documents](operations/reference-documents.md) in Word
+and PDF, go through their checklist, then announce it. If something is wrong, remove it: the previous
+template (the server's, or the built-in styling) applies to the next export. Uploads and removals are in
+the audit trail.
+
+**As a deployment artefact**, like a configuration file: mount it into the container (volume, ConfigMap,
+secret) and point `WORD_TEMPLATE_PATH` at it.
 
 ```yaml
 # docker compose
@@ -136,12 +153,13 @@ services:
 ```
 
 Every instance that runs workers needs the file. Updating it requires a restart, which is also when it is
-re-validated.
+re-validated. An uploaded template, kept in the database, needs neither.
 
 ## Troubleshooting
 
 | Symptom                                        | Cause and fix                                                                 |
 | ---------------------------------------------- | ----------------------------------------------------------------------------- |
+| Refused as *unsafe*, or startup fails with `unsafe Word template` | The message names the part: a macro, an ActiveX control, an external link or a field loading content. Remove it in Word and save again. |
 | Startup fails with `invalid Word template`      | The file is not a Word package, or misses `styles.xml` / page setup. Re-save it from Word. |
 | Startup fails with `template has no <w:sectPr>` | The template has no page setup. Open it in Word, adjust any margin, save again. |
 | The header is missing                           | It was defined in Word as a *first page* header only, and the export's first page uses the default header. Define the default header too. |

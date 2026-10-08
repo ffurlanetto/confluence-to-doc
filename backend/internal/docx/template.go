@@ -94,6 +94,9 @@ func LoadTemplate(pathOnDisk string) (*Template, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkSafe(t.parts); err != nil {
+		return nil, err
+	}
 	t.name = path.Base(pathOnDisk)
 	return t, nil
 }

@@ -272,3 +272,28 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   skips validation, and test `Validate` separately.
 - Every page polls `/api/notifications` (the unread badge), so `mockApi` in the frontend tests answers it
   with an empty inbox unless a test overrides it.
+
+### Operations (ADR 0014)
+
+- An admin **cancel** only updates the row (`status = 'failed'`, `locked_by = NULL`): the worker notices at
+  its next heartbeat (`Lease / 3`) through `ErrLeaseLost` and discards its file. Nothing signals it sooner.
+- Blocking is enforced in `SessionUser` (`blocked_at IS NULL`) as well as at sign-in: a sign-in flow already
+  past the IdP when the block lands would otherwise get a working session.
+- **Usage figures come from `audit_events`** (`export.complete` / `export.fail` details), not from
+  `exports`: export rows are purged 30 days after they expire, audit events after a year. Admin
+  cancellations are `admin.export.cancel`, so they do not count as failures.
+- The uploaded template's checksum is read **once per export**, before rendering, and the same
+  `*docx.Template` goes to the renderer and the converter: reading it twice could render for one template
+  and apply another.
+- `docx.checkSafe` concatenates the `w:instrText` runs of a part before matching field codes: Word splits
+  `INCLUDEPICTURE` across runs. Matching on the raw XML instead would also flag body text such as "Link to…".
+- The template upload is the only `/api` route with a body over 64 KB: it is registered outside the group
+  that applies `maxBody(64 << 10)`, since a nested `http.MaxBytesReader` cannot raise an outer limit.
+- The queue gauge `c2d.queue.exports` is observed by **every** instance from the same table: aggregate it
+  with `max`, never `sum`.
+- In the alert unit tests, `absent()` with a regex matcher yields no `job` label, and a burn-rate alert's
+  `$value` is the first window's ratio, not the raw failure share.
+- Playwright's `webServer` kills the command it started; `go run` leaves the compiled binary running, so
+  the e2e servers are built and `exec`'d instead.
+- `@playwright/test` is pinned to the browser build of the CI install; locally,
+  `CHROMIUM_PATH=/opt/pw-browsers/chromium` uses the browser already on the machine.

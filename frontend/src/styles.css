@@ -403,3 +403,55 @@ h3 {
   margin: 1.25rem 0 0.25rem;
   font-size: 1rem;
 }
+
+/* Administration */
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.subnav a {
+  padding: 0.5rem 0;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+
+.subnav a.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+
+.block-form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 40rem;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0 0 1rem;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+table.summary {
+  max-width: 32rem;
+}
+
+table.summary th {
+  text-align: left;
+  font-weight: normal;
+  color: var(--muted);
+}

@@ -23,6 +23,7 @@ func main() {
 	idpAddr := flag.String("oidc-addr", ":8091", "listen address of the fake OIDC provider")
 	issuer := flag.String("oidc-issuer", "http://localhost:8091", "externally visible issuer URL")
 	pat := flag.String("pat", "dev-pat", "the only personal access token accepted by the fake Confluence")
+	latency := flag.Duration("confluence-latency", 0, "delay added to every fake Confluence answer (load tests)")
 	flag.Parse()
 
 	idp := oidcmock.New("confluence-to-doc", "dev-secret", oidcmock.User{
@@ -33,6 +34,7 @@ func main() {
 	idp.Issuer = *issuer
 
 	conf := fake.New(*pat)
+	conf.Latency = *latency
 	seed(conf)
 
 	go serve(*idpAddr, idp, "fake OIDC provider (client_id=confluence-to-doc, secret=dev-secret)")
@@ -64,6 +66,8 @@ func seed(f *fake.Server) {
 			Body: fmt.Sprintf("<p>Handling procedure for alert %d.</p>", i)})
 	}
 	f.AddPage(fake.Page{ID: "200", Title: "Meeting notes", SpaceKey: "TEAM", Body: `<p>Standalone page, no children.</p>`})
+	// The reference documents (docs/operations/reference-documents.md).
+	fake.SeedReference(f, demoImage())
 }
 
 func demoImage() []byte {

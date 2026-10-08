@@ -1,0 +1,89 @@
+# Unit tests of the alert rules: `make check-alerts` renders them to
+# rules.yaml next to this file, then runs `promtool test rules` on it.
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a queue that does not move pages the on-call
+    interval: 1m
+    input_series:
+      # Exports finish for 20 minutes, then the workers stop.
+      - series: 'c2d_queue_exports{job="docs/confluence-to-doc", c2d_queue_state="queued"}'
+        values: '3x90'
+      - series: 'c2d_exports_finished_total{job="docs/confluence-to-doc", c2d_export_outcome="succeeded", c2d_export_format="pdf"}'
+        values: '0+1x20 20x70'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: C2DWorkersStalled
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: C2DWorkersStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Exports are queued but no worker has finished any in 30 minutes.
+              runbook_url: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md#workers-stalled
+
+  - name: user mistakes do not burn the export error budget, system failures do
+    interval: 1m
+    input_series:
+      # 100 exports a minute succeed; 20 a minute fail because of the users,
+      # then, after an hour, 20 a minute fail because of the system.
+      - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="succeeded", c2d_export_format="pdf"}'
+        values: '0+100x180'
+      - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="failed", c2d_export_cause="user", c2d_export_format="pdf"}'
+        values: '0+20x180'
+      - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="failed", c2d_export_cause="system", c2d_export_format="pdf"}'
+        values: '0x60 0+20x120'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: C2DExportErrorBudgetBurn
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: C2DExportErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Exports fail for reasons users cannot fix, fast enough to exhaust the monthly error budget.
+              description: 8.999% of exports fail with a system error (conversion, template, storage, Confluence outage).
+              runbook_url: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md#export-failures
+
+  - name: API server errors burn the availability budget
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{job="confluence-to-doc", http_route="/api/exports", http_response_status_code="200"}'
+        values: '0+100x120'
+      - series: 'http_server_request_duration_seconds_count{job="confluence-to-doc", http_route="/api/exports", http_response_status_code="500"}'
+        values: '0+10x120'
+      # Errors outside the API (probes, static files) do not count.
+      - series: 'http_server_request_duration_seconds_count{job="confluence-to-doc", http_route="/readyz", http_response_status_code="503"}'
+        values: '0+1000x120'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: C2DAPIErrorBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: The API is failing fast enough to exhaust its monthly error budget.
+              description: 9.091% of API requests return a 5xx error.
+              runbook_url: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md#api-errors
+
+  - name: silence from the application is itself an alert
+    interval: 1m
+    input_series:
+      - series: 'up{job="something-else"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: C2DTelemetryAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: No metric arrives from the application; the alerts above are blind.
+              runbook_url: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md#telemetry-absent

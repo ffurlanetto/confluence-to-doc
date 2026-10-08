@@ -46,7 +46,7 @@ func TestConvertPDF(t *testing.T) {
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := (LibreOffice{}).Convert(ctx, []byte(sample), domain.FormatPDF, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, []byte(sample), domain.FormatPDF, nil, docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.HasPrefix(out.Bytes(), []byte("%PDF-")) {
@@ -59,7 +59,7 @@ func TestConvertDOCX(t *testing.T) {
 	var out bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := (LibreOffice{}).Convert(ctx, []byte(sample), domain.FormatDOCX, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, []byte(sample), domain.FormatDOCX, nil, docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
@@ -78,14 +78,14 @@ func TestConvertDOCX(t *testing.T) {
 }
 
 func TestConvertRejectsUnknownFormat(t *testing.T) {
-	err := (LibreOffice{}).Convert(context.Background(), nil, domain.Format("odt"), docx.Marking{}, &bytes.Buffer{})
+	err := (LibreOffice{}).Convert(context.Background(), nil, domain.Format("odt"), nil, docx.Marking{}, &bytes.Buffer{})
 	if !errors.Is(err, domain.ErrInvalidFormat) {
 		t.Fatalf("want ErrInvalidFormat, got %v", err)
 	}
 }
 
 func TestConvertReportsMissingBinary(t *testing.T) {
-	err := (LibreOffice{Binary: "/nonexistent/soffice"}).Convert(context.Background(), []byte(sample), domain.FormatPDF, docx.Marking{}, &bytes.Buffer{})
+	err := (LibreOffice{Binary: "/nonexistent/soffice"}).Convert(context.Background(), []byte(sample), domain.FormatPDF, nil, docx.Marking{}, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -172,8 +172,8 @@ func TestConvertDOCXWithCompanyTemplate(t *testing.T) {
 	defer cancel()
 
 	var out bytes.Buffer
-	conv := LibreOffice{Template: minimalTemplate(t)}
-	if err := conv.Convert(ctx, []byte(sample), domain.FormatDOCX, docx.Marking{}, &out); err != nil {
+	conv, tpl := LibreOffice{}, minimalTemplate(t)
+	if err := conv.Convert(ctx, []byte(sample), domain.FormatDOCX, tpl, docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 
@@ -224,10 +224,10 @@ func TestConvertPDFWithCompanyTemplate(t *testing.T) {
 	defer cancel()
 
 	var out bytes.Buffer
-	conv := LibreOffice{Template: minimalTemplate(t)}
+	conv, tpl := LibreOffice{}, minimalTemplate(t)
 	// Succeeding here means LibreOffice reopened the templated DOCX, which is
 	// the strongest available check that the produced package is well formed.
-	if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, docx.Marking{}, &out); err != nil {
+	if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, tpl, docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.HasPrefix(out.Bytes(), []byte("%PDF-")) {
@@ -290,7 +290,7 @@ func TestConvertFitsTablesToTheTemplatePage(t *testing.T) {
 	defer cancel()
 
 	var out bytes.Buffer
-	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, wideSample(), domain.FormatDOCX, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, wideSample(), domain.FormatDOCX, minimalTemplate(t), docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	doc := documentXML(t, out.Bytes())
@@ -333,7 +333,7 @@ func TestConvertKeepsInlineFormatting(t *testing.T) {
 		`<a href="https://confluence.example.com/x/1">link</a>.</p></body></html>`
 
 	var out bytes.Buffer
-	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, []byte(html), domain.FormatDOCX, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, []byte(html), domain.FormatDOCX, minimalTemplate(t), docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	doc := documentXML(t, out.Bytes())
@@ -382,7 +382,7 @@ func TestConvertProducesAStructuredDocument(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, html, domain.FormatDOCX, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, html, domain.FormatDOCX, minimalTemplate(t), docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	doc := documentXML(t, out.Bytes())
@@ -455,7 +455,7 @@ func TestConvertFitsAWideConfluenceTable(t *testing.T) {
 		`<td></td><td>AGASSI-PRD-REDHAT-1 (group.echonet)</td></tr></tbody></table></body></html>`)
 
 	var out bytes.Buffer
-	if err := (LibreOffice{Template: minimalTemplate(t)}).Convert(ctx, []byte(b.String()), domain.FormatDOCX, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, []byte(b.String()), domain.FormatDOCX, minimalTemplate(t), docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	doc := documentXML(t, out.Bytes())
@@ -510,13 +510,14 @@ func TestConvertFitsAWideConfluenceTable(t *testing.T) {
 func TestMarkingReachesBothFormats(t *testing.T) {
 	requireSoffice(t)
 	m := docx.Marking{Footer: "Exported by Ann on 2026-10-08 09:14 UTC · Confidential · Ref. 0199-test", Watermark: "CONFIDENTIAL"}
-	for name, conv := range map[string]LibreOffice{"built-in styling": {}, "company template": {Template: minimalTemplate(t)}} {
+	for name, tpl := range map[string]*docx.Template{"built-in styling": nil, "company template": minimalTemplate(t)} {
+		conv := LibreOffice{}
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 
 			var docxOut bytes.Buffer
-			if err := conv.Convert(ctx, []byte(sample), domain.FormatDOCX, m, &docxOut); err != nil {
+			if err := conv.Convert(ctx, []byte(sample), domain.FormatDOCX, tpl, m, &docxOut); err != nil {
 				t.Fatal(err)
 			}
 			zr, err := zip.NewReader(bytes.NewReader(docxOut.Bytes()), int64(docxOut.Len()))
@@ -540,7 +541,7 @@ func TestMarkingReachesBothFormats(t *testing.T) {
 			}
 
 			var pdf bytes.Buffer
-			if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, m, &pdf); err != nil {
+			if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, tpl, m, &pdf); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := exec.LookPath("pdftotext"); err != nil {
@@ -586,7 +587,7 @@ func TestLibreOfficeReachesNoNetwork(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var out bytes.Buffer
-	if err := (LibreOffice{}).Convert(ctx, []byte(html), domain.FormatPDF, docx.Marking{}, &out); err != nil {
+	if err := (LibreOffice{}).Convert(ctx, []byte(html), domain.FormatPDF, nil, docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if n := hits.Load(); n != 0 {
@@ -634,7 +635,7 @@ func TestPDFIsTaggedForAccessibility(t *testing.T) {
 	defer cancel()
 	var out bytes.Buffer
 	conv := LibreOffice{Language: "fr-FR"}
-	if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, docx.Marking{}, &out); err != nil {
+	if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, nil, docx.Marking{}, &out); err != nil {
 		t.Fatal(err)
 	}
 	content := pdfContent(t, out.Bytes())

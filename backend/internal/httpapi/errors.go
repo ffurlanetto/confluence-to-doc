@@ -10,6 +10,7 @@ import (
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/notify"
 )
@@ -66,6 +67,14 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusBadRequest, "invalid_teams_url", "This is not a Microsoft Teams workflow URL (https, on a Microsoft domain allowed by the administrator).")
 	case errors.Is(err, domain.ErrInvalidClassification):
 		writeError(w, r, http.StatusBadRequest, "invalid_classification", "Unknown classification.")
+	case errors.Is(err, domain.ErrExportState):
+		writeError(w, r, http.StatusConflict, "invalid_state", "The export's current state does not allow this action.")
+	case errors.Is(err, domain.ErrSelfAction):
+		writeError(w, r, http.StatusConflict, "self_action", "You cannot do this to your own account.")
+	case errors.Is(err, docx.ErrUnsafeTemplate):
+		writeError(w, r, http.StatusBadRequest, "unsafe_template", "The template refers to external content, or carries macros or ActiveX controls. Remove them and upload it again.")
+	case errors.Is(err, docx.ErrInvalidTemplate):
+		writeError(w, r, http.StatusBadRequest, "invalid_template", "This file is not a usable Word template (a .docx or .dotx file of at most 10 MB).")
 	case errors.Is(err, domain.ErrInvalidPageID):
 		writeError(w, r, http.StatusBadRequest, "invalid_page", "Invalid page identifier.")
 	default:
