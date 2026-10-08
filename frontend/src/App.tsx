@@ -7,6 +7,7 @@ import { AdminAuditPage } from './pages/AdminAuditPage';
 import { ExportsPage } from './pages/ExportsPage';
 import { LoginPage } from './pages/LoginPage';
 import { NewExportPage } from './pages/NewExportPage';
+import { NotificationsPage } from './pages/NotificationsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 export function App() {
@@ -28,6 +29,7 @@ export function App() {
         <Route path="/" element={<ExportsPage />} />
         <Route path="/new" element={<NewExportPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/notifications" element={<NotificationsPage />} />
         {me.data.isAdmin && <Route path="/admin/audit" element={<AdminAuditPage />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -82,6 +82,11 @@ type Config struct {
 	Export ExportConfig
 	// Telemetry configures OpenTelemetry; it is enabled by an OTLP endpoint.
 	Telemetry TelemetryConfig
+	// SMTP sends notifications by email; enabled by SMTP_HOST.
+	SMTP SMTPConfig
+	// TeamsWebhookHosts are the host suffixes a user's Teams workflow URL
+	// may point to.
+	TeamsWebhookHosts []string
 	// S3 configures object storage for generated documents. It is enabled
 	// when S3_BUCKET is set; otherwise documents are stored on local disk.
 	S3 S3Config
@@ -103,6 +108,18 @@ type TelemetryConfig struct {
 
 // Enabled is the telemetry feature flag: an OTLP endpoint turns it on.
 func (c TelemetryConfig) Enabled() bool { return c.Endpoint != "" }
+
+type SMTPConfig struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	From     string
+	Security string // starttls | tls | none
+}
+
+// Enabled is the email feature flag: a relay host turns it on.
+func (c SMTPConfig) Enabled() bool { return c.Host != "" }
 
 type S3Config struct {
 	Bucket string
@@ -250,6 +267,18 @@ func load(getenv func(string) string) (*Config, error) {
 		MetricInterval: e.duration("OTEL_METRIC_EXPORT_INTERVAL", time.Minute),
 		MetricPrefix:   metricPrefix(e.str("TELEMETRY_METRIC_PREFIX", "")),
 	}
+	cfg.SMTP = SMTPConfig{
+		Host:     e.str("SMTP_HOST", ""),
+		Port:     e.int("SMTP_PORT", 587),
+		Username: e.str("SMTP_USERNAME", ""),
+		Password: e.str("SMTP_PASSWORD", ""),
+		From:     e.str("SMTP_FROM", ""),
+		Security: e.str("SMTP_SECURITY", "starttls"),
+	}
+	cfg.TeamsWebhookHosts = e.csv("TEAMS_WEBHOOK_HOSTS")
+	if len(cfg.TeamsWebhookHosts) == 0 {
+		cfg.TeamsWebhookHosts = []string{"logic.azure.com", "powerplatform.com", "webhook.office.com"}
+	}
 	cfg.S3 = S3Config{
 		Bucket:          e.str("S3_BUCKET", ""),
 		Region:          e.str("S3_REGION", "us-east-1"),
@@ -325,6 +354,22 @@ func (c *Config) validate() error {
 	}
 	if p := c.Telemetry.MetricPrefix; p != "" && !metricPrefixPattern.MatchString(p) {
 		errs = append(errs, fmt.Errorf("TELEMETRY_METRIC_PREFIX: %q must start with a letter and use only letters, digits, '.', '_' or '-'", p))
+	}
+	if c.SMTP.Enabled() {
+		switch c.SMTP.Security {
+		case "starttls", "tls", "none":
+		default:
+			errs = append(errs, fmt.Errorf("SMTP_SECURITY: invalid value %q (want starttls, tls or none)", c.SMTP.Security))
+		}
+		if c.SMTP.From == "" {
+			errs = append(errs, errors.New("SMTP_FROM is required when SMTP_HOST is set"))
+		}
+		if c.SMTP.Port < 1 || c.SMTP.Port > 65535 {
+			errs = append(errs, errors.New("SMTP_PORT must be a TCP port"))
+		}
+		if c.SMTP.Username != "" && c.SMTP.Security == "none" {
+			errs = append(errs, errors.New("SMTP_USERNAME needs SMTP_SECURITY starttls or tls: credentials are not sent in clear"))
+		}
 	}
 	if c.S3.Enabled() {
 		if (c.S3.AccessKeyID == "") != (c.S3.SecretAccessKey == "") {

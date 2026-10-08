@@ -102,6 +102,7 @@ from a Secret the operator already owns are referenced directly instead.
 {{- if and .Values.database.url (not .Values.database.existingSecret) }}{{ $managed = true }}{{ end -}}
 {{- if and .Values.oidc.clientSecret (not .Values.oidc.existingSecret) }}{{ $managed = true }}{{ end -}}
 {{- if and .Values.encryptionKey (not .Values.existingEncryptionKeySecret) }}{{ $managed = true }}{{ end -}}
+{{- if and .Values.notifications.smtp.password (not .Values.notifications.smtp.existingSecret) }}{{ $managed = true }}{{ end -}}
 {{- if and (eq .Values.storage.type "s3") (not .Values.storage.s3.existingSecret) .Values.storage.s3.accessKeyId }}{{ $managed = true }}{{ end -}}
 {{- if $managed }}true{{ end -}}
 {{- end }}
@@ -161,6 +162,15 @@ spec:
             secretKeyRef:
               name: {{ $ctx.Values.existingEncryptionKeySecret }}
               key: {{ $ctx.Values.existingEncryptionKeySecretKey }}
+        {{- end }}
+        {{- with $ctx.Values.notifications.smtp }}
+        {{- if .existingSecret }}
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .existingSecret }}
+              key: {{ .existingSecretKey }}
+        {{- end }}
         {{- end }}
         {{- if and (eq $ctx.Values.storage.type "s3") $ctx.Values.storage.s3.existingSecret }}
         - name: S3_ACCESS_KEY_ID

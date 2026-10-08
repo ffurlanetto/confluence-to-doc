@@ -41,6 +41,8 @@ const (
 	ActionKeyRotation       = "keys.rotate"
 	ActionAccountDelete     = "account.delete"
 	ActionAccountPurge      = "account.purge"
+	ActionTeamsSet          = "notifications.teams_set"
+	ActionTeamsDelete       = "notifications.teams_delete"
 )
 
 // Target types.

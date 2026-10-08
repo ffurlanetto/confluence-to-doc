@@ -160,11 +160,12 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 // ---------------------------------------------------------- preferences
 
 func (s *Store) GetPreferences(ctx context.Context, userID uuid.UUID) (*domain.Preferences, error) {
-	p := &domain.Preferences{UserID: userID, DefaultFormat: domain.FormatPDF}
+	p := &domain.Preferences{UserID: userID, DefaultFormat: domain.FormatPDF, NotifyEmail: true, NotifyExports: true}
 	var format string
 	err := s.pool.QueryRow(ctx, `
-		SELECT encrypted_pat, pat_updated_at, pat_expires_at, default_format FROM user_preferences WHERE user_id = $1`, userID,
-	).Scan(&p.EncryptedPAT, &p.PATUpdatedAt, &p.PATExpiresAt, &format)
+		SELECT encrypted_pat, pat_updated_at, pat_expires_at, default_format, notify_email, notify_exports, teams_webhook
+		  FROM user_preferences WHERE user_id = $1`, userID,
+	).Scan(&p.EncryptedPAT, &p.PATUpdatedAt, &p.PATExpiresAt, &format, &p.NotifyEmail, &p.NotifyExports, &p.EncryptedTeamsWebhook)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, nil
 	}
@@ -183,7 +184,7 @@ func (s *Store) SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byt
 		VALUES ($1, $2, CASE WHEN $2::bytea IS NULL THEN NULL ELSE now() END, $3)
 		ON CONFLICT (user_id) DO UPDATE
 		   SET encrypted_pat = EXCLUDED.encrypted_pat, pat_updated_at = EXCLUDED.pat_updated_at,
-		       pat_expires_at = EXCLUDED.pat_expires_at, updated_at = now()`,
+		       pat_expires_at = EXCLUDED.pat_expires_at, pat_expiry_notified_at = NULL, updated_at = now()`,
 		userID, encryptedPAT, expiresAt)
 	return err
 }

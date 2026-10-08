@@ -146,6 +146,8 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
   never leave the backend; the browser only holds an opaque session cookie (`HttpOnly`, `SameSite=Lax`,
   `Secure` + `__Host-` prefix over HTTPS). Only its SHA-256 is stored. Sessions are re-checked with the
   provider and ended by back-channel logout (ADR 0012).
+- **Notifications** — an outbox in PostgreSQL drained by the workers (email, Teams), shown in the application
+  too; Teams URLs are user-provided, so they are pinned to Microsoft hosts and stored encrypted (ADR 0013).
 - **Personal data** — users can delete their account; unused accounts are deleted after a notice; see
   [gdpr.md](gdpr.md).
 - **CSRF** — a mandatory `X-CSRF-Protection: 1` header plus `Origin` / `Sec-Fetch-Site` checks.

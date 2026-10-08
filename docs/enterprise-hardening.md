@@ -32,8 +32,8 @@ taken with the product owner are recorded here so the lots stay consistent.
    API rate limit. *(ADR 0011, done)*
 5. **Lifecycle and GDPR** — periodic session revalidation and back-channel logout; PAT expiry warning;
    inactive account purge; self-service data deletion; processing record; tagged (accessible) PDF.
-   *(ADR 0012)* The inactivity warning is only logged until lot 6 brings the notification channels.
-6. **Notifications** — email, Teams, in-app.
+   *(ADR 0012, done)*
+6. **Notifications** — email, Teams, in-app. *(ADR 0013)*
 7. **Operations** — admin console (queue, cancel/retry, usage, blocking a user, Word template upload);
    alert rules, dashboard and SLOs; runbooks; backup and recovery; Playwright end-to-end tests in CI; load
    tests; reference documents; Confluence 9.x compatibility; threat model.

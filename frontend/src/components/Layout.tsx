@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 
 import { api } from '../api/client';
-import { usePreferences } from '../api/hooks';
+import { useNotifications, usePreferences } from '../api/hooks';
 import type { Me, Preferences } from '../api/types';
 import { daysUntil, formatDate, PAT_WARNING_DAYS } from '../lib/format';
 
@@ -17,6 +17,8 @@ async function logout() {
 
 export function Layout({ me, children }: { me: Me; children: ReactNode }) {
   const prefs = usePreferences();
+  const inbox = useNotifications();
+  const unread = inbox.data?.unread ?? 0;
   return (
     <>
       <header className="topbar">
@@ -29,6 +31,12 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
           </NavLink>
           <NavLink to="/new">New export</NavLink>
           <NavLink to="/settings">Preferences</NavLink>
+          <NavLink
+            to="/notifications"
+            aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+          >
+            Notifications{unread > 0 && <span className="count">{unread}</span>}
+          </NavLink>
           {me.isAdmin && <NavLink to="/admin/audit">Audit</NavLink>}
         </nav>
         <div className="user">

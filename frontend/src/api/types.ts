@@ -18,6 +18,15 @@ export interface Preferences {
   patUpdatedAt?: string;
   /** When the token stops working, if Confluence reported it. */
   patExpiresAt?: string;
+  /** The address notifications are emailed to. */
+  email: string;
+  /** Whether the server can send email at all. */
+  emailAvailable: boolean;
+  notifyEmail: boolean;
+  /** Whether finished exports are notified (account notices always are). */
+  notifyExports: boolean;
+  /** A Teams workflow URL is saved; the URL itself is never returned. */
+  hasTeamsWebhook: boolean;
   defaultFormat: ExportFormat;
   retentionHours: number;
   maxPages: number;
@@ -99,4 +108,19 @@ export interface AuditFilter {
   /** RFC 3339 timestamps. */
   from?: string;
   to?: string;
+}
+
+export interface AppNotification {
+  id: string;
+  kind: 'export.succeeded' | 'export.failed' | 'pat.expiring' | 'account.inactive';
+  title: string;
+  body: string;
+  link?: string;
+  createdAt: string;
+  readAt?: string;
+}
+
+export interface Inbox {
+  notifications: AppNotification[];
+  unread: number;
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/notify"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/testutil"
@@ -62,8 +63,9 @@ func (copyConverter) Convert(_ context.Context, html []byte, _ domain.Format, _ 
 }
 
 type api struct {
-	t   *testing.T
-	srv *httptest.Server
+	t     *testing.T
+	srv   *httptest.Server
+	store *store.Store
 }
 
 func newAPI(t *testing.T) *api { return newAPIWithWorker(t, true) }
@@ -101,6 +103,7 @@ func newAPIWithWorker(t *testing.T, startWorker bool, opts ...func(*httpapi.Deps
 		Exports:               export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 3}, pool.Notify),
 		Audit:                 audit.New(s, nil),
 		Lifecycle:             account.NewLifecycle(s, blobs, audit.New(s, nil), account.LogNotifier{}),
+		Notifications:         notify.NewService(s, sealer, "http://app.test", false, notify.NewTeams(notify.DefaultTeamsHosts, nil)),
 		AuditLog:              s,
 		Ready:                 s.Ping,
 		PublicURL:             pub,
@@ -115,7 +118,7 @@ func newAPIWithWorker(t *testing.T, startWorker bool, opts ...func(*httpapi.Deps
 	router := httpapi.NewRouter(deps)
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	return &api{t: t, srv: srv}
+	return &api{t: t, srv: srv, store: s}
 }
 
 // do sends a request as user (empty = anonymous) and decodes the JSON body into out.

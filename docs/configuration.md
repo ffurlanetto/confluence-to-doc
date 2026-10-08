@@ -214,6 +214,33 @@ the next sign-in. Keycloak and Okta issue refresh tokens by default; **Entra ID*
 `offline_access` scope (`OIDC_SCOPES=openid profile email offline_access`). Without a refresh token, a
 session lasts until `SESSION_TTL` unless a back-channel logout ends it.
 
+## Notifications
+
+Users are told when an export is ready or failed, when their Confluence token is about to expire (14 days
+ahead) and when their inactive account is about to be deleted. Every notification is listed under
+*Notifications* in the application (with an unread count in the menu, kept 90 days); users choose in
+*Preferences* whether finished exports are notified and whether by email. Account notices go to every
+channel the user set up, whatever their choices.
+
+| Variable              | Default                 | Description |
+| --------------------- | ----------------------- | ----------- |
+| `SMTP_HOST`           | _(empty)_               | Mail relay; empty disables email |
+| `SMTP_PORT`           | `587`                   | |
+| `SMTP_SECURITY`       | `starttls`              | `starttls`, `tls` (implicit, port 465) or `none` (a local relay only; refused with credentials) |
+| `SMTP_FROM`           | _(required with a host)_ | Sender, e.g. `Confluence Export <noreply@example.com>` |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | _(empty)_    | Relay credentials, if it asks for them |
+| `TEAMS_WEBHOOK_HOSTS` | `logic.azure.com, powerplatform.com, webhook.office.com` | Host suffixes a user's Teams workflow URL may point to |
+
+**Microsoft Teams.** Each user creates a workflow in Teams from the template *Send webhook alerts to a chat*
+(or *to a channel*) and pastes its URL in *Preferences*, where a test message checks it. The URL is a
+credential — anyone holding it can post in that chat — so it is stored encrypted and never returned. Since
+the server makes a request to a URL a user provided, only HTTPS URLs on `TEAMS_WEBHOOK_HOSTS` are accepted
+(checked when saved and before each request) and redirects are not followed; with NetworkPolicies, allow
+egress to those hosts on port 443.
+
+Deliveries are queued and sent by the workers, retried with backoff (1 minute to 4 hours) for about a day
+before being given up. A message carries a title, a status and a link — never a document.
+
 ## Account lifecycle and personal data
 
 - Users can **delete their account** from *Preferences*: token, preferences, sessions and exports with

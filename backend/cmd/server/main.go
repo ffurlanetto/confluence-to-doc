@@ -26,6 +26,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/notify"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/observability"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/ratelimit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
@@ -103,7 +104,18 @@ func run() error {
 		accounts.WithLimiter(ratelimit.NewShared(db, "confluence", cfg.ConfluenceRateLimit, float64(cfg.ConfluenceRateBurst)))
 	}
 	auditor := audit.New(db, nil)
-	lifecycle := account.NewLifecycle(db, blobs, auditor, account.LogNotifier{})
+	teams := notify.NewTeams(cfg.TeamsWebhookHosts, nil)
+	var mailer *notify.Email
+	if cfg.SMTP.Enabled() {
+		if mailer, err = notify.NewEmail(notify.SMTPConfig(cfg.SMTP)); err != nil {
+			return err
+		}
+		slog.Info("notifications: email through SMTP", "host", cfg.SMTP.Host, "port", cfg.SMTP.Port, "security", cfg.SMTP.Security)
+	} else {
+		slog.Info("notifications: no SMTP_HOST, email disabled")
+	}
+	notifications := notify.NewService(db, sealer, cfg.PublicURL.String(), mailer != nil, teams)
+	lifecycle := account.NewLifecycle(db, blobs, auditor, notifications)
 	lifecycle.Retention, lifecycle.Notice = cfg.AccountRetention, cfg.AccountDeletionNotice
 
 	// The company Word template is validated at startup: a broken template
@@ -121,7 +133,7 @@ func run() error {
 	}
 
 	var wg sync.WaitGroup
-	var notify func()
+	var wakeWorkers func()
 
 	if cfg.Role.RunsWorker() {
 		conv := converter.LibreOffice{Binary: cfg.Export.SofficePath, Template: template, Language: cfg.Export.Language}
@@ -139,14 +151,23 @@ func run() error {
 			Classifications:   cfg.Export.Classifications,
 			ShutdownGrace:     20 * time.Second,
 			Audit:             auditor,
+			Notify:            notifications,
 		})
-		notify = pool.Notify
+		wakeWorkers = pool.Notify
 		janitor := export.NewJanitor(db, blobs, cfg.Export.JanitorInterval).WithAudit(auditor, db, cfg.AuditRetention).
 			WithKeyRotation(accounts).
-			WithAccountPurge(lifecycle)
-		wg.Add(2)
+			WithAccountPurge(lifecycle).
+			WithNotifications(notifications, db)
+		// A nil *notify.Email must not become a non-nil interface.
+		var emailSender notify.EmailSender
+		if mailer != nil {
+			emailSender = mailer
+		}
+		dispatcher := notify.NewDispatcher(db, sealer, emailSender, teams, 10*time.Second)
+		wg.Add(3)
 		go func() { defer wg.Done(); pool.Run(ctx) }()
 		go func() { defer wg.Done(); janitor.Run(ctx) }()
+		go func() { defer wg.Done(); dispatcher.Run(ctx) }()
 	}
 
 	if telemetry.Enabled {
@@ -164,9 +185,10 @@ func run() error {
 		router := httpapi.NewRouter(httpapi.Deps{
 			Auth:                  authenticator,
 			Accounts:              accounts,
-			Exports:               export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, notify),
+			Exports:               export.NewService(db, blobs, export.Limits{MaxAttempts: cfg.Export.MaxAttempts, MaxActivePerUser: cfg.Export.MaxActivePerUser}, wakeWorkers),
 			Audit:                 auditor,
 			Lifecycle:             lifecycle,
+			Notifications:         notifications,
 			AuditLog:              db,
 			TrustedProxies:        cfg.TrustedProxies,
 			UserLimiter:           keyedLimiter(cfg.APIRateLimit, cfg.APIRateBurst),

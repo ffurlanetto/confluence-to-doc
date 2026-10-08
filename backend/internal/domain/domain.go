@@ -58,6 +58,12 @@ type Preferences struct {
 	// PATExpiresAt is when the token stops working, if Confluence said.
 	PATExpiresAt  *time.Time
 	DefaultFormat Format
+	// NotifyEmail sends notifications by email (when the server can);
+	// NotifyExports includes finished exports, not only account notices.
+	NotifyEmail   bool
+	NotifyExports bool
+	// EncryptedTeamsWebhook is the user's Teams workflow URL, encrypted.
+	EncryptedTeamsWebhook []byte
 }
 
 // HasPAT reports whether the user configured a Confluence token.
@@ -191,4 +197,52 @@ type AuditFilter struct {
 	// Before is the pagination cursor: only events older than this id.
 	Before *uuid.UUID
 	Limit  int
+}
+
+// NotificationKind identifies what a notification is about.
+type NotificationKind string
+
+const (
+	NotifyExportSucceeded NotificationKind = "export.succeeded"
+	NotifyExportFailed    NotificationKind = "export.failed"
+	NotifyPATExpiring     NotificationKind = "pat.expiring"
+	NotifyAccountInactive NotificationKind = "account.inactive"
+)
+
+// Optional reports whether the user may turn the notification off: export
+// outcomes are, notices about their account are not.
+func (k NotificationKind) Optional() bool {
+	return k == NotifyExportSucceeded || k == NotifyExportFailed
+}
+
+// Notification is a message to a user, shown in the application and
+// delivered on the channels they chose.
+type Notification struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Kind      NotificationKind
+	Title     string
+	Body      string
+	Link      string
+	CreatedAt time.Time
+	ReadAt    *time.Time
+}
+
+// Channel is an external way of delivering a notification.
+type Channel string
+
+const (
+	ChannelEmail Channel = "email"
+	ChannelTeams Channel = "teams"
+)
+
+// Delivery is a notification to send on one channel, with what sending needs.
+type Delivery struct {
+	Notification Notification
+	Channel      Channel
+	Attempts     int
+	Email        string
+	// EncryptedTeamsWebhook is read at sending time: a URL removed since the
+	// notification was created is not used.
+	EncryptedTeamsWebhook []byte
 }

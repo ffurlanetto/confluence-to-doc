@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -347,5 +348,50 @@ func TestEveryDocumentIsMarked(t *testing.T) {
 	doc = read(plain)
 	if !strings.Contains(doc, " · Internal · Ref. "+plain.ID.String()) || !strings.Contains(doc, "WATERMARK: \n") {
 		t.Errorf("default classification not applied:\n%s", doc[strings.Index(doc, "FOOTER"):])
+	}
+}
+
+type recordingNotifier struct {
+	mu        sync.Mutex
+	succeeded []string
+	failed    []string
+}
+
+func (r *recordingNotifier) ExportSucceeded(_ context.Context, job *domain.Export, _ time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.succeeded = append(r.succeeded, job.ID.String())
+}
+
+func (r *recordingNotifier) ExportFailed(_ context.Context, job *domain.Export, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failed = append(r.failed, reason)
+}
+
+func TestRequesterIsNotified(t *testing.T) {
+	e := newEnv(t, htmlConverter{})
+	notifier := &recordingNotifier{}
+	e.pool = export.NewPool(e.store, e.account, htmlConverter{}, e.blobs, export.WorkerConfig{
+		Concurrency: 1, PollInterval: 20 * time.Millisecond, JobTimeout: time.Minute, Lease: 3 * time.Second,
+		Retention: time.Hour, MaxPages: 10, MaxImageBytes: 1 << 20, ConfluenceWorkers: 2, Notify: notifier,
+	})
+	ctx := context.Background()
+	if _, err := e.account.SetPAT(ctx, e.user.ID, "pat"); err != nil {
+		t.Fatal(err)
+	}
+	runPool(t, e.pool)
+	ok, _ := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "1", Format: domain.FormatPDF})
+	missing, _ := e.svc.Create(ctx, export.CreateRequest{UserID: e.user.ID, RootPageID: "404", Format: domain.FormatPDF})
+	e.waitFor(t, ok.ID, domain.StatusSucceeded)
+	e.waitFor(t, missing.ID, domain.StatusFailed)
+
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	if len(notifier.succeeded) != 1 || notifier.succeeded[0] != ok.ID.String() {
+		t.Errorf("succeeded: %v", notifier.succeeded)
+	}
+	if len(notifier.failed) != 1 || !strings.Contains(notifier.failed[0], "cannot be found") {
+		t.Errorf("failed: %v", notifier.failed)
 	}
 }

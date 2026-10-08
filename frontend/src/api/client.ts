@@ -1,5 +1,6 @@
 import type {
   AuditFilter,
+  Inbox,
   AuditPage,
   CreateExportRequest,
   Export,
@@ -53,6 +54,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   me: () => request<Me>('GET', '/api/me'),
   deleteAccount: () => request<undefined>('DELETE', '/api/me'),
+
+  notifications: () => request<Inbox>('GET', '/api/notifications'),
+  markNotificationsRead: () => request<undefined>('POST', '/api/notifications/read'),
+  setNotificationPreferences: (email: boolean, exports: boolean) =>
+    request<Preferences>('PUT', '/api/preferences/notifications', { email, exports }),
+  setTeamsWebhook: (url: string) => request<Preferences>('PUT', '/api/preferences/teams', { url }),
+  deleteTeamsWebhook: () => request<undefined>('DELETE', '/api/preferences/teams'),
+  testTeams: () => request<undefined>('POST', '/api/preferences/teams/test'),
 
   preferences: () => request<Preferences>('GET', '/api/preferences'),
   setDefaultFormat: (defaultFormat: ExportFormat) =>

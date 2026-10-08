@@ -10,7 +10,12 @@ type Handler = (init: RequestInit | undefined, url: URL) => { status?: number; b
  * Installs a fetch mock routing "METHOD /path" to handlers. Unhandled calls
  * fail the test loudly. Returns the mock to assert on calls.
  */
-export function mockApi(routes: Record<string, Handler>) {
+export function mockApi(overrides: Record<string, Handler>) {
+  // Every page polls the inbox for the unread badge: empty unless a test says otherwise.
+  const routes: Record<string, Handler> = {
+    'GET /api/notifications': () => ({ body: { notifications: [], unread: 0 } }),
+    ...overrides,
+  };
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.toString(), 'http://localhost');
     const key = `${init?.method ?? 'GET'} ${url.pathname}`;
@@ -50,6 +55,11 @@ export const prefs = {
     { label: 'Confidential', watermark: true },
   ],
   defaultClassification: 'Internal',
+  email: 'alice@example.com',
+  emailAvailable: true,
+  notifyEmail: true,
+  notifyExports: true,
+  hasTeamsWebhook: false,
 };
 
 export const me = { id: 'u1', email: 'alice@example.com', name: 'Alice', isAdmin: false };

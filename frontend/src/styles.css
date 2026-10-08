@@ -364,3 +364,42 @@ table.audit code {
   font-size: 0.8rem;
   word-break: break-all;
 }
+
+.topbar nav .count {
+  display: inline-block;
+  min-width: 1.2rem;
+  margin-left: 0.3rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--error);
+  color: #fff;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.notifications {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.notification {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.notification p {
+  margin: 0.25rem 0;
+}
+
+.notification.unread {
+  border-left: 4px solid var(--blue);
+}
+
+h3 {
+  margin: 1.25rem 0 0.25rem;
+  font-size: 1rem;
+}
