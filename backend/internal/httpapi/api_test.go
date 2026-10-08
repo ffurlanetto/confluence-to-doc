@@ -13,10 +13,12 @@ import (
 	"time"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/admin"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence/fake"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/doctemplate"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
@@ -57,7 +59,7 @@ func (a headerAuth) Middleware(next http.Handler) http.Handler {
 
 type copyConverter struct{}
 
-func (copyConverter) Convert(_ context.Context, html []byte, _ domain.Format, _ docx.Marking, dst io.Writer) error {
+func (copyConverter) Convert(_ context.Context, html []byte, _ domain.Format, _ *docx.Template, _ docx.Marking, dst io.Writer) error {
 	_, err := dst.Write(html)
 	return err
 }
@@ -105,6 +107,8 @@ func newAPIWithWorker(t *testing.T, startWorker bool, opts ...func(*httpapi.Deps
 		Lifecycle:             account.NewLifecycle(s, blobs, audit.New(s, nil), account.LogNotifier{}),
 		Notifications:         notify.NewService(s, sealer, "http://app.test", false, notify.NewTeams(notify.DefaultTeamsHosts, nil)),
 		AuditLog:              s,
+		Admin:                 admin.NewService(s, nil, 48*time.Hour, pool.Notify),
+		Templates:             doctemplate.New(s, nil),
 		Ready:                 s.Ping,
 		PublicURL:             pub,
 		Retention:             48 * time.Hour,

@@ -33,7 +33,8 @@ taken with the product owner are recorded here so the lots stay consistent.
 5. **Lifecycle and GDPR** — periodic session revalidation and back-channel logout; PAT expiry warning;
    inactive account purge; self-service data deletion; processing record; tagged (accessible) PDF.
    *(ADR 0012, done)*
-6. **Notifications** — email, Teams, in-app. *(ADR 0013)*
+6. **Notifications** — email, Teams, in-app. *(ADR 0013, done)*
 7. **Operations** — admin console (queue, cancel/retry, usage, blocking a user, Word template upload);
    alert rules, dashboard and SLOs; runbooks; backup and recovery; Playwright end-to-end tests in CI; load
-   tests; reference documents; Confluence 9.x compatibility; threat model.
+   tests; reference documents; Confluence 9.x compatibility; threat model. *(ADR 0014; the operations
+   documentation is in [operations/](operations/README.md))*

@@ -2,12 +2,15 @@ import { useState, type FormEvent } from 'react';
 
 import { useAuditEvents } from '../api/hooks';
 import type { AuditEvent, AuditFilter } from '../api/types';
+import { AdminNav } from '../components/AdminNav';
 import { formatDate } from '../lib/format';
 
 /** Actions recorded by the backend (backend/internal/audit). */
 const actions: { value: string; label: string }[] = [
   { value: 'auth.login', label: 'Sign-in' },
   { value: 'auth.logout', label: 'Sign-out' },
+  { value: 'auth.session_revoked', label: 'Session ended by the identity provider' },
+  { value: 'auth.backchannel_logout', label: 'Sign-out from the identity provider' },
   { value: 'pat.set', label: 'Token saved' },
   { value: 'pat.delete', label: 'Token removed' },
   { value: 'preferences.update', label: 'Preferences changed' },
@@ -17,8 +20,22 @@ const actions: { value: string; label: string }[] = [
   { value: 'export.download', label: 'Document downloaded' },
   { value: 'export.delete', label: 'Export deleted' },
   { value: 'export.expire', label: 'Document expired' },
+  { value: 'notifications.teams_set', label: 'Teams notifications set' },
+  { value: 'notifications.teams_delete', label: 'Teams notifications removed' },
+  { value: 'account.delete', label: 'Account deleted by its owner' },
+  { value: 'account.purge', label: 'Inactive account deleted' },
+  { value: 'keys.rotate', label: 'Tokens re-encrypted' },
   { value: 'admin.access', label: 'Administration access' },
   { value: 'admin.audit.read', label: 'Audit trail read' },
+  { value: 'admin.queue.read', label: 'Queue viewed' },
+  { value: 'admin.export.cancel', label: 'Export cancelled' },
+  { value: 'admin.export.retry', label: 'Export retried' },
+  { value: 'admin.users.read', label: 'Users viewed' },
+  { value: 'admin.user.block', label: 'User blocked' },
+  { value: 'admin.user.unblock', label: 'User unblocked' },
+  { value: 'admin.usage.read', label: 'Usage viewed' },
+  { value: 'admin.template.upload', label: 'Word template uploaded' },
+  { value: 'admin.template.reset', label: 'Word template removed' },
 ];
 
 const actionLabel = (action: string) => actions.find((a) => a.value === action)?.label ?? action;
@@ -54,6 +71,7 @@ export function AdminAuditPage() {
 
   return (
     <section>
+      <AdminNav />
       <div className="section-header">
         <h1>Audit trail</h1>
       </div>

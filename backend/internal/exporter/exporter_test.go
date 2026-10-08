@@ -345,3 +345,44 @@ func TestRenderLoadsNothingRemote(t *testing.T) {
 		}
 	}
 }
+
+// TestReferenceDocumentsRenderSafely renders the whole reference tree: every
+// page arrives, in order, and nothing in the result can make LibreOffice
+// fetch a resource or run code (security invariant 7).
+func TestReferenceDocumentsRenderSafely(t *testing.T) {
+	f := fake.New("tok")
+	fake.SeedReference(f, pngBytes(t, 400, 160))
+	srv := httptest.NewServer(f)
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	c := confluence.NewClient(u, "tok", srv.Client())
+
+	root, err := exporter.BuildTree(context.Background(), c, fake.ReferenceRootID,
+		exporter.TreeOptions{IncludeChildren: true, MaxPages: 50, Concurrency: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := root.Count(); n != 14 {
+		t.Fatalf("reference tree has %d pages, want 14", n)
+	}
+	out, err := exporter.RenderHTML(context.Background(), root, exporter.RenderOptions{
+		Title: root.Page.Title, SourceURL: root.Page.WebURL, GeneratedAt: time.Now(),
+	}, exporter.ConfluenceAssets{Client: c, MaxImageBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.ToLower(string(out))
+	for _, forbidden := range []string{
+		"evil.example", "<script", "<iframe", "<object", "<embed", "<video", "<audio", "<link", "<form",
+		"onerror", "onload", "javascript:", "url(",
+	} {
+		if strings.Contains(doc, forbidden) {
+			t.Errorf("the rendered reference documents contain %q", forbidden)
+		}
+	}
+	for _, kept := range []string{"rendering reference", "merged cells", "column 14", "info panel", "日本語", "العربية", "depth 6"} {
+		if !strings.Contains(doc, kept) {
+			t.Errorf("the rendered reference documents lack %q", kept)
+		}
+	}
+}

@@ -39,9 +39,10 @@ type WorkerConfig struct {
 	MaxPages          int
 	MaxImageBytes     int64
 	ConfluenceWorkers int
-	// UseTemplateStyles tells the renderer to leave typography to the
-	// company Word template instead of styling the document itself.
-	UseTemplateStyles bool
+	// Templates gives the company Word template to apply to each export
+	// (the renderer then leaves typography to it); nil uses the built-in
+	// styling.
+	Templates TemplateSource
 	// Classification is the default classification, used when the requester
 	// chose none: written to the subject property and the page footer.
 	Classification string
@@ -55,6 +56,12 @@ type WorkerConfig struct {
 	Audit Auditor
 	// Notify tells the requester an export finished; nil tells no one.
 	Notify Notifier
+}
+
+// TemplateSource gives the company Word template in use, nil for none
+// (implemented by doctemplate.Source).
+type TemplateSource interface {
+	Current(ctx context.Context) (*docx.Template, error)
 }
 
 // Notifier tells users about their exports (implemented by notify.Service).
@@ -273,7 +280,8 @@ func (p *Pool) finish(ctx context.Context, log *slog.Logger, job *domain.Export,
 	}
 	observability.ExportsFinished.Add(ctx, 1, metric.WithAttributes(
 		observability.AttrFormat.String(string(job.Format)),
-		observability.AttrOutcome.String(outcome)))
+		observability.AttrOutcome.String(outcome),
+		observability.AttrCause.String(FailureCause(cause))))
 	log.WarnContext(ctx, "export attempt failed", "err", cause, "outcome", outcome)
 	if outcome == "failed" {
 		p.cfg.Audit.Record(ctx, exportEvent(job, audit.ActionExportFail, domain.AuditFailure,
@@ -315,6 +323,14 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	if err != nil {
 		return "", 0, 0, fmt.Errorf("loading the requester: %w", err)
 	}
+	// Read once, so that rendering and conversion agree on the template even
+	// if an administrator replaces it meanwhile.
+	var template *docx.Template
+	if p.cfg.Templates != nil {
+		if template, err = p.cfg.Templates.Current(ctx); err != nil {
+			return "", 0, 0, fmt.Errorf("loading the Word template: %w", err)
+		}
+	}
 	classification := job.Classification
 	if classification == "" {
 		classification = p.cfg.Classification
@@ -342,7 +358,7 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 		Title:             root.Page.Title,
 		SourceURL:         root.Page.WebURL,
 		GeneratedAt:       generatedAt,
-		UseTemplateStyles: p.cfg.UseTemplateStyles,
+		UseTemplateStyles: template != nil,
 		Author:            p.author(ctx, client),
 		Description:       description(root, generatedAt),
 		Keywords:          keywords(root),
@@ -363,7 +379,7 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 	pr, pw := io.Pipe()
 	convErr := make(chan error, 1)
 	go func() {
-		err := p.converter.Convert(ctx, html, job.Format, p.marking(job, requester, classification, generatedAt), pw)
+		err := p.converter.Convert(ctx, html, job.Format, template, p.marking(job, requester, classification, generatedAt), pw)
 		pw.CloseWithError(err)
 		convErr <- err
 	}()
@@ -393,6 +409,24 @@ func retryable(err error) bool {
 	}
 	return confluence.Retryable(err)
 }
+
+// FailureCause is "user" for a failure the requester can fix themselves
+// (token, permissions, missing page, too large a tree), "system" otherwise.
+func FailureCause(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrPATMissing), errors.Is(err, domain.ErrPATUnreadable),
+		errors.Is(err, confluence.ErrUnauthorized), errors.Is(err, confluence.ErrForbidden),
+		errors.Is(err, confluence.ErrNotFound), errors.Is(err, exporter.ErrTooManyPages):
+		return "user"
+	}
+	return "system"
+}
+
+// Messages recorded on exports an administrator stopped, shown to their owner.
+const (
+	MessageCancelled      = "Cancelled by an administrator."
+	MessageAccountBlocked = "Cancelled because your account was blocked by an administrator."
+)
 
 // UserMessage converts an internal error into a message safe to show to the
 // user (no internal details, actionable when possible).

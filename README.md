@@ -111,6 +111,7 @@ Details in [docs/architecture.md](docs/architecture.md); decisions in [docs/adr/
 | [docs/html-mapping.md](docs/html-mapping.md)         | What each HTML element becomes in the Word and PDF output  |
 | [docs/agent-memory.md](docs/agent-memory.md)         | Durable project memory for AI agents and new contributors  |
 | [docs/enterprise-hardening.md](docs/enterprise-hardening.md) | Enterprise hardening plan: decisions and lots      |
+| [docs/operations/](docs/operations/README.md)        | Monitoring, SLOs, runbooks, backup, threat model, load tests |
 | [docs/releasing.md](docs/releasing.md)               | Publishing the container image, tags, running a release    |
 | [charts/confluence-to-doc/](charts/confluence-to-doc/) | Helm chart: values, storage choices, operational notes   |
 | [docs/adr/](docs/adr/)                               | Architecture decision records                              |
@@ -127,6 +128,9 @@ make help    # all commands
 - Backend tests: unit + PostgreSQL integration (`TEST_DATABASE_URL`) + real LibreOffice conversion
   (skipped cleanly when the tool is absent).
 - Frontend tests: Vitest + Testing Library.
+- End-to-end tests: Playwright drives the real server and LibreOffice against the fake Confluence and
+  identity provider (`make e2e`); load tests use k6 (`loadtest/`, see
+  [docs/operations/load-testing.md](docs/operations/load-testing.md)).
 
 ## Layout
 
@@ -136,9 +140,11 @@ backend/
   cmd/devmocks      mock Confluence + mock OIDC provider (development and tests only)
   internal/
     account         preferences, PAT (validation + encryption)
+    admin           administration console: queue, users, usage
     auth            OIDC (Authorization Code + PKCE), sessions, middleware
     confluence      Confluence REST client (+ fake/ for tests)
     converter       HTML → PDF/DOCX through LibreOffice
+    doctemplate     which company Word template applies (uploaded or configured)
     docx            applies the company Word template to a generated document
     exporter        page-tree crawl + HTML assembly
     export          use cases: creation, worker pool, janitor
@@ -148,7 +154,10 @@ backend/
     store           PostgreSQL (embedded migrations, job queue)
 frontend/src/
   api/              typed HTTP client + React Query hooks
-  pages/            screens (exports, new export, preferences)
+  pages/            screens (exports, new export, preferences, notifications, administration)
   components/       shared components
 docs/               architecture, configuration, Word template, HTML mapping, releasing, ADRs
+docs/operations/    monitoring, SLOs, runbooks, backup and recovery, threat model
+e2e/                Playwright end-to-end tests
+loadtest/           k6 load test
 ```

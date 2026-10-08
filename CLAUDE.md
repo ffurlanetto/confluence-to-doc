@@ -20,6 +20,9 @@ Generation is asynchronous through a PostgreSQL-backed queue; files are download
 | Frontend tests               | `make test-frontend`       |
 | Run locally                  | `make dev-mocks` + `make dev-backend` + `make dev-frontend` |
 | Full stack in Docker         | `make up`                  |
+| End-to-end tests (browser)   | `make e2e` (needs PostgreSQL and LibreOffice) |
+| Alert rules (promtool)       | `make check-alerts`        |
+| Real Confluence check        | `make confluence-check` (read-only, see docs/operations) |
 
 `make test-backend` expects PostgreSQL at `TEST_DATABASE_URL`
 (default `postgres://c2d:c2d@localhost:5432/c2d`); each test creates and drops its own database.
@@ -52,10 +55,16 @@ Janitor      ─► store.ListExpired ─► storage.Delete ─► store.MarkExp
 - `internal/observability` owns OpenTelemetry. Instruments are package-level and created against the
   global provider, which is a no-op until `Setup` runs — OTel re-points them, so never create instruments
   lazily "to be safe". Telemetry is enabled by `OTEL_EXPORTER_OTLP_ENDPOINT`; there is no `/metrics`.
-- `internal/docx` applies the company Word template when `WORD_TEMPLATE_PATH` is set; it is loaded and
-  validated once in `cmd/server`. With a template the renderer drops its own typography
-  (`RenderOptions.UseTemplateStyles`) and PDFs are produced from the templated DOCX. See
-  [docs/word-template.md](docs/word-template.md) and ADR 0006.
+- `internal/docx` applies the company Word template. `internal/doctemplate` chooses it per export: the one
+  uploaded from the admin console (PostgreSQL), else `WORD_TEMPLATE_PATH` (validated at startup), else none.
+  The worker reads it **once per export** and passes it to both the renderer (`UseTemplateStyles`) and
+  `converter.Convert`; PDFs are produced from the templated DOCX. Every template goes through
+  `docx.checkSafe` (no macros, ActiveX, external content). See [docs/word-template.md](docs/word-template.md),
+  ADR 0006 and ADR 0014.
+- `internal/admin` holds the admin console's use cases (queue, cancel/retry, users/blocking, usage from the
+  audit trail). Every admin endpoint records an audit event, reads included.
+- `e2e/` (Playwright) runs the real server against `cmd/devmocks`; the fake Confluence also serves the
+  reference documents (`fake.SeedReference`, page 900). Operations docs live in `docs/operations/`.
 
 ## Conventions
 

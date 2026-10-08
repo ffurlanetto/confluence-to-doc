@@ -1,0 +1,20 @@
+{{- if .Values.monitoring.grafanaDashboard.enabled }}
+{{- $prefix := .Values.telemetry.metricPrefix | replace "." "_" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "confluence-to-doc.fullname" . }}-dashboard
+  labels:
+    {{- include "confluence-to-doc.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.grafanaDashboard.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  confluence-to-doc.json: |-
+    {{- $json := .Files.Get "files/grafana-dashboard.json" }}
+    {{- /* Metric names carry the prefix, attribute (label) names do not. */}}
+    {{- range list "c2d_exports_finished" "c2d_exports_created" "c2d_export_duration" "c2d_export_pages" "c2d_queue_exports" }}
+    {{- $json = $json | replace . (printf "%s%s" $prefix .) }}
+    {{- end }}
+    {{- $json | nindent 4 }}
+{{- end }}

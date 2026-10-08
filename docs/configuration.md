@@ -54,7 +54,7 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `EXPORT_JANITOR_INTERVAL`      | `10m`                   | How often expired exports are purged                            |
 | `EXPORT_STORAGE_DIR`           | `./data/exports`        | Directory of generated documents in local storage (ignored when S3 is enabled) |
 | `SOFFICE_PATH`                 | `soffice`               | LibreOffice binary                                              |
-| `WORD_TEMPLATE_PATH`           | _(empty)_               | Company Word template applied to every document                 |
+| `WORD_TEMPLATE_PATH`           | _(empty)_               | Company Word template applied to every document, unless an administrator uploaded one |
 | `DOCUMENT_CLASSIFICATION`      | _(empty)_               | Default classification, used when the requester picks none: subject property and page footer |
 | `DOCUMENT_LANGUAGE`            | _(empty)_               | Default language of the documents (BCP 47, e.g. `fr-FR`), declared to screen readers in the tagged PDF. Empty keeps the template's, or `en-US` |
 | `DOCUMENT_CLASSIFICATIONS`     | `Public, Internal, Confidential:watermark, Restricted:watermark` | Levels offered when exporting; `:watermark` sets the label diagonally across every page. `none` removes the choice |
@@ -167,8 +167,10 @@ sits in front of it.
 Setting `WORD_TEMPLATE_PATH` to a `.docx`/`.dotx` file makes every export — Word and PDF — come out in the
 company format: header, footer, fonts and page layout. Leaving it empty keeps the built-in styling.
 
-The file is read and validated at startup; every instance running workers needs it. How to prepare the
-template and what it must contain is covered in [word-template.md](word-template.md).
+The file is read and validated at startup; every instance running workers needs it. An administrator can
+also upload a template from the console, which then takes precedence until it is removed. How to prepare
+the template and what it must contain (and must not: macros, external content) is covered in
+[word-template.md](word-template.md).
 
 ## Document storage (S3 feature flag)
 
@@ -274,7 +276,8 @@ the key back makes it readable.
 
 ### Administrators
 
-Every authenticated user can export. The **administration pages** (audit trail today) are reserved to
+Every authenticated user can export. The **administration console** (`/admin`: export queue with cancel
+and retry, users with blocking, usage, the Word template, the audit trail) is reserved to
 members of `OIDC_ADMIN_GROUPS`, read from the claim named by `OIDC_GROUPS_CLAIM` in the ID token — or from
 the UserInfo endpoint when the provider only exposes it there. The role is re-evaluated at every sign-in:
 removing someone from the group takes effect at their next login (at most `SESSION_TTL` later).
@@ -340,6 +343,8 @@ The trail never contains a token, a cookie or document content — only titles, 
 - Put the application behind a TLS reverse proxy; `PUBLIC_URL` must be the public `https://` URL.
 - With local storage, the `api` and `worker` roles must share `EXPORT_STORAGE_DIR` (RWX volume). With S3
   (`S3_BUCKET`) no shared volume is needed: API and workers can run on different machines.
-- Back up PostgreSQL; the exported documents are ephemeral (48 h) and need no backup.
+- Back up PostgreSQL, and the encryption keys separately; the exported documents are ephemeral (48 h) and
+  need no backup. See [operations/backup-and-recovery.md](operations/backup-and-recovery.md).
+- Alert rules, a dashboard, service level objectives and runbooks: [operations/](operations/README.md).
 - Every role serves `/healthz` and `/readyz` on `HTTP_ADDR`, workers included, so a worker pod can be
   probed like any other.

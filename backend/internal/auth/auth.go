@@ -217,6 +217,18 @@ func (a *Authenticator) Callback(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, "login failed", err)
 		return
 	}
+	if user.Blocked() {
+		// Blocked from the administration console: the identity provider
+		// still vouches for the person, this application does not let them in.
+		slog.WarnContext(ctx, "blocked account refused at sign-in", "user_id", user.ID)
+		actorID, email := audit.Actor(user)
+		a.audit.Record(ctx, domain.AuditEvent{
+			ActorID: actorID, ActorEmail: email, Action: audit.ActionLogin, Outcome: domain.AuditDenied,
+			TargetType: audit.TargetUser, TargetID: user.ID.String(), Details: map[string]any{"reason": "blocked"},
+		})
+		http.Error(w, "Your account has been blocked. Contact your administrator.", http.StatusForbidden)
+		return
+	}
 	user.IsAdmin = a.isAdmin(ctx, rawClaims, tok)
 	if err := a.repo.RecordLogin(ctx, user.ID, user.IsAdmin); err != nil {
 		a.fail(w, r, "login failed", err)

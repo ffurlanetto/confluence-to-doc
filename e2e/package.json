@@ -1,0 +1,14 @@
+{
+  "name": "confluence-to-doc-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^26.6.4",
+    "typescript": "^6.0.3"
+  }
+}

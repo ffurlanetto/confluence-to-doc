@@ -19,6 +19,15 @@ var (
 	ErrInvalidPageID         = errors.New("invalid page id")
 	ErrExportNotDeletable    = errors.New("export is being processed and cannot be deleted")
 	ErrInvalidClassification = errors.New("unknown document classification")
+	// ErrExportState means the export is not in a state that allows the
+	// requested administration action (cancel a finished one, retry one that
+	// did not fail).
+	ErrExportState = errors.New("export state does not allow this action")
+	// ErrUserBlocked is returned at sign-in for a blocked account.
+	ErrUserBlocked = errors.New("user account is blocked")
+	// ErrSelfAction is an administrator acting on their own account where it
+	// would lock them out.
+	ErrSelfAction = errors.New("administrators cannot do this to their own account")
 	// ErrPATUnreadable means no key of the ring can decrypt the stored token:
 	// the key that encrypted it was removed. The user must enter it again.
 	ErrPATUnreadable = errors.New("confluence personal access token cannot be decrypted")
@@ -37,7 +46,13 @@ type User struct {
 	// LastActiveAt is the last sign-in, or the creation for an account that
 	// never signed in again. Only filled where it is needed.
 	LastActiveAt time.Time
+	// BlockedAt is set while an administrator blocks the account.
+	BlockedAt     *time.Time
+	BlockedReason string
 }
+
+// Blocked reports whether the account may not be used.
+func (u *User) Blocked() bool { return u.BlockedAt != nil }
 
 type Session struct {
 	UserID    uuid.UUID
@@ -245,4 +260,56 @@ type Delivery struct {
 	// EncryptedTeamsWebhook is read at sending time: a URL removed since the
 	// notification was created is not used.
 	EncryptedTeamsWebhook []byte
+}
+
+// AdminExport is an export as the administration console lists it: with its
+// owner, since the queue spans every user.
+type AdminExport struct {
+	Export
+	OwnerEmail string
+}
+
+// UserSummary is a user as the administration console lists it.
+type UserSummary struct {
+	User
+	ActiveExports int
+	TotalExports  int
+}
+
+// Usage summarises the exports finished over a period, from the audit trail.
+type Usage struct {
+	From      time.Time
+	Succeeded int
+	Failed    int
+	Pages     int64
+	Bytes     int64
+	Users     int
+	ByFormat  map[Format]int
+	Daily     []DailyUsage
+	TopUsers  []UserUsage
+}
+
+type DailyUsage struct {
+	Day       time.Time
+	Succeeded int
+	Failed    int
+}
+
+type UserUsage struct {
+	UserID  uuid.UUID
+	Email   string
+	Exports int
+	Pages   int64
+}
+
+// DocumentTemplate is a company Word template uploaded from the
+// administration console.
+type DocumentTemplate struct {
+	Name       string
+	Content    []byte
+	SHA256     []byte
+	UploadedBy *uuid.UUID
+	// UploadedByEmail is filled when listing, empty if the account is gone.
+	UploadedByEmail string
+	UploadedAt      time.Time
 }

@@ -4,3 +4,4 @@
 *.tmproj
 .idea/
 .vscode/
+tests/

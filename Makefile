@@ -51,6 +51,23 @@ test-backend-short: ## Backend unit tests only (no PostgreSQL, no LibreOffice)
 test-frontend:
 	cd $(FRONTEND) && npm test
 
+.PHONY: e2e
+e2e: ## End-to-end tests in a browser: real server and LibreOffice, fake Confluence and IdP (needs PostgreSQL)
+	cd $(FRONTEND) && npm run build
+	cd e2e && npm ci && npx playwright test
+
+.PHONY: check-alerts
+check-alerts: ## Validate and unit-test the alert rules of the chart (needs helm, yq, promtool)
+	helm template c2d charts/confluence-to-doc -f charts/confluence-to-doc/values-production.yaml \
+		--set monitoring.prometheusRule.enabled=true --show-only templates/prometheusrule.yaml \
+		| yq '.spec' > charts/confluence-to-doc/tests/rules.yaml
+	promtool check rules charts/confluence-to-doc/tests/rules.yaml
+	promtool test rules charts/confluence-to-doc/tests/alerts.test.yaml
+
+.PHONY: confluence-check
+confluence-check: ## Read-only compatibility check against a real Confluence (CONFLUENCE_LIVE_URL, _PAT, _PAGE)
+	cd $(BACKEND) && go test -tags live -count=1 -v -run TestLiveConfluence ./internal/confluence/
+
 ## ---------------------------------------------------------------- run
 .PHONY: build
 build: ## Build the SPA and the Go binaries into backend/bin

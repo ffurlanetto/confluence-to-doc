@@ -16,6 +16,8 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/doctemplate"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/docx"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 )
@@ -73,6 +75,25 @@ type Notifications interface {
 	TestTeams(ctx context.Context, userID uuid.UUID) error
 }
 
+// Admin is the administration console (implemented by admin.Service).
+type Admin interface {
+	Queue(ctx context.Context, statuses []domain.ExportStatus) ([]domain.AdminExport, error)
+	Cancel(ctx context.Context, id uuid.UUID) (*domain.Export, error)
+	Retry(ctx context.Context, id uuid.UUID) (*domain.Export, error)
+	Users(ctx context.Context, query string) ([]domain.UserSummary, error)
+	Block(ctx context.Context, actor *domain.User, id uuid.UUID, reason string) (*domain.User, int64, error)
+	Unblock(ctx context.Context, id uuid.UUID) (*domain.User, error)
+	Usage(ctx context.Context, days int) (*domain.Usage, error)
+}
+
+// Templates manages the company Word template (implemented by
+// doctemplate.Source).
+type Templates interface {
+	Info(ctx context.Context) (doctemplate.Info, error)
+	Upload(ctx context.Context, name string, content []byte, by uuid.UUID) (doctemplate.Info, error)
+	Reset(ctx context.Context) error
+}
+
 // Lifecycle deletes accounts (implemented by account.Lifecycle).
 type Lifecycle interface {
 	DeleteAccount(ctx context.Context, u *domain.User) error
@@ -86,6 +107,8 @@ type Deps struct {
 	Lifecycle     Lifecycle
 	Notifications Notifications
 	AuditLog      AuditLog
+	Admin         Admin
+	Templates     Templates
 	// TrustedProxies may set X-Forwarded-For (see config.TrustedProxies).
 	TrustedProxies []netip.Prefix
 	// UserLimiter bounds API requests per user, AuthLimiter sign-in requests
@@ -97,13 +120,15 @@ type Deps struct {
 	StaticDir   string
 	Retention   time.Duration
 	MaxPages    int
-	// DocumentTemplate is the company Word template file name, empty when
-	// documents use the built-in styling.
-	DocumentTemplate string
 	// Classifications are the levels offered when exporting (empty: no
 	// choice); DefaultClassification applies when the user picks none.
 	Classifications       []domain.Classification
 	DefaultClassification string
+}
+
+// maxBody bounds request bodies.
+func maxBody(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return http.MaxBytesHandler(next, n) }
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -137,36 +162,49 @@ func NewRouter(d Deps) http.Handler {
 	h := &handlers{d: d}
 	r.Route("/api", func(r chi.Router) {
 		r.Use(csrfProtect(d.PublicURL), d.Auth.Middleware, limitBy(d.UserLimiter, userKey), middleware.NoCache)
-		r.Use(func(next http.Handler) http.Handler {
-			return http.MaxBytesHandler(next, 64<<10) // JSON payloads are tiny
-		})
 
-		r.Get("/me", h.me)
-		r.Delete("/me", h.deleteMe)
-		r.Get("/preferences", h.getPreferences)
-		r.Put("/preferences", h.putPreferences)
-		r.Put("/preferences/pat", h.putPAT)
-		r.Put("/preferences/notifications", h.putNotificationPreferences)
-		r.Put("/preferences/teams", h.putTeams)
-		r.Delete("/preferences/teams", h.deleteTeams)
-		r.Post("/preferences/teams/test", h.testTeams)
-		r.Get("/notifications", h.listNotifications)
-		r.Post("/notifications/read", h.readNotifications)
-		r.Delete("/preferences/pat", h.deletePAT)
+		// The Word template is the only upload: its own size limit.
+		r.With(h.requireAdmin, maxBody(docx.MaxTemplateSize)).Put("/admin/template", h.putTemplate)
 
-		r.Get("/confluence/pages", h.searchPages)
-		r.Get("/confluence/pages/{pageID}", h.getPage)
-		r.Get("/confluence/pages/{pageID}/children", h.getChildren)
+		r.Group(func(r chi.Router) {
+			r.Use(maxBody(64 << 10)) // JSON payloads are tiny
 
-		r.Get("/exports", h.listExports)
-		r.Post("/exports", h.createExport)
-		r.Get("/exports/{exportID}", h.getExport)
-		r.Delete("/exports/{exportID}", h.deleteExport)
-		r.Get("/exports/{exportID}/download", h.download)
+			r.Get("/me", h.me)
+			r.Delete("/me", h.deleteMe)
+			r.Get("/preferences", h.getPreferences)
+			r.Put("/preferences", h.putPreferences)
+			r.Put("/preferences/pat", h.putPAT)
+			r.Put("/preferences/notifications", h.putNotificationPreferences)
+			r.Put("/preferences/teams", h.putTeams)
+			r.Delete("/preferences/teams", h.deleteTeams)
+			r.Post("/preferences/teams/test", h.testTeams)
+			r.Get("/notifications", h.listNotifications)
+			r.Post("/notifications/read", h.readNotifications)
+			r.Delete("/preferences/pat", h.deletePAT)
 
-		r.Route("/admin", func(r chi.Router) {
-			r.Use(h.requireAdmin)
-			r.Get("/audit", h.listAudit)
+			r.Get("/confluence/pages", h.searchPages)
+			r.Get("/confluence/pages/{pageID}", h.getPage)
+			r.Get("/confluence/pages/{pageID}/children", h.getChildren)
+
+			r.Get("/exports", h.listExports)
+			r.Post("/exports", h.createExport)
+			r.Get("/exports/{exportID}", h.getExport)
+			r.Delete("/exports/{exportID}", h.deleteExport)
+			r.Get("/exports/{exportID}/download", h.download)
+
+			r.Group(func(r chi.Router) {
+				r.Use(h.requireAdmin)
+				r.Get("/admin/audit", h.listAudit)
+				r.Get("/admin/exports", h.listQueue)
+				r.Post("/admin/exports/{exportID}/cancel", h.cancelExport)
+				r.Post("/admin/exports/{exportID}/retry", h.retryExport)
+				r.Get("/admin/users", h.listUsers)
+				r.Post("/admin/users/{userID}/block", h.blockUser)
+				r.Delete("/admin/users/{userID}/block", h.unblockUser)
+				r.Get("/admin/usage", h.usage)
+				r.Get("/admin/template", h.getTemplate)
+				r.Delete("/admin/template", h.deleteTemplate)
+			})
 		})
 	})
 

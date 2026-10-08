@@ -27,6 +27,10 @@ const (
 	AttrExportID = attribute.Key("c2d.export.id")
 	AttrPageID   = attribute.Key("c2d.page.id")
 	AttrState    = attribute.Key("c2d.queue.state")
+	// AttrCause tells, for a failed attempt, whether the user can fix it
+	// ("user": token, permissions, missing page, too many pages) or not
+	// ("system"). Service level objectives count only the latter.
+	AttrCause = attribute.Key("c2d.export.cause")
 )
 
 // Instruments are created against the global meter provider. That provider is
@@ -43,7 +47,7 @@ var (
 
 	// ExportsFinished counts finished attempts, by outcome.
 	ExportsFinished = mustInt64Counter("c2d.exports.finished",
-		metric.WithDescription("Export attempts finished, by outcome (succeeded, retry, failed)."),
+		metric.WithDescription("Export attempts finished, by outcome (succeeded, retry, failed) and, when not succeeded, cause (user, system)."),
 		metric.WithUnit("{export}"))
 
 	// ExportDuration measures end-to-end generation time.

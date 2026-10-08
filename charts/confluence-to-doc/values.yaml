@@ -198,6 +198,36 @@ telemetry:
   #  team: platform
   #  deployment.environment: production
 
+# -- Alerting and dashboard, for a Prometheus fed by an OpenTelemetry collector
+# (see docs/operations/monitoring.md for the metric names this assumes).
+monitoring:
+  # Label selector identifying this deployment's series. Empty: the job label
+  # the collector derives from service.namespace/service.name.
+  selector: ""
+  # Where the runbook links of the alerts point.
+  runbookBaseUrl: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md
+  prometheusRule:
+    # Needs the Prometheus Operator (monitoring.coreos.com/v1 PrometheusRule).
+    enabled: false
+    # Extra labels, e.g. the one your Prometheus selects rules with.
+    labels: {}
+  grafanaDashboard:
+    # A ConfigMap the Grafana dashboard sidecar picks up.
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
+  thresholds:
+    # Error budgets of the service level objectives (docs/operations/slo.md):
+    # 0.5 % of API requests may fail, 1 % of exports may fail for a system cause.
+    apiErrorBudget: 0.005
+    exportErrorBudget: 0.01
+    # Exports waiting for 15 minutes before C2DQueueBacklog fires.
+    queueBacklog: 20
+    # 95th percentile of generation time, in seconds.
+    exportP95Seconds: 600
+    # 95th percentile of API latency (downloads and uploads excluded), in seconds.
+    apiP95Seconds: 2
+
 logging:
   level: info
   format: json
@@ -310,9 +340,10 @@ networkPolicy:
   # -- Allow DNS lookups to kube-dns in any namespace.
   allowDNS: true
   # -- Egress rules (NetworkPolicyEgressRule) for every destination the pods
-  # use: Confluence, PostgreSQL, the identity provider, object storage and the
-  # telemetry collector. Outside the cluster these are CIDR blocks; nothing
-  # else is reachable.
+  # use: Confluence, PostgreSQL, the identity provider, object storage, the
+  # telemetry collector and, with notifications, the SMTP relay and Microsoft
+  # Teams (workers send them). Outside the cluster these are CIDR blocks;
+  # nothing else is reachable.
   egress: []
 
 # Scratch space for LibreOffice; an export is written here before it is stored.

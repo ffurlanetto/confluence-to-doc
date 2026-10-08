@@ -25,7 +25,7 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
         <Link to="/" className="brand">
           Confluence Export
         </Link>
-        <nav aria-label="Navigation principale">
+        <nav aria-label="Main navigation">
           <NavLink to="/" end>
             My exports
           </NavLink>
@@ -37,7 +37,7 @@ export function Layout({ me, children }: { me: Me; children: ReactNode }) {
           >
             Notifications{unread > 0 && <span className="count">{unread}</span>}
           </NavLink>
-          {me.isAdmin && <NavLink to="/admin/audit">Audit</NavLink>}
+          {me.isAdmin && <NavLink to="/admin">Administration</NavLink>}
         </nav>
         <div className="user">
           <span title={me.email}>{me.name || me.email}</span>

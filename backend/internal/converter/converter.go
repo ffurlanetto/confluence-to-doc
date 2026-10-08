@@ -17,9 +17,10 @@ import (
 )
 
 // Converter converts a self-contained HTML document into the target format
-// and writes the result to dst.
+// and writes the result to dst. template is the company Word template to
+// apply, nil for the built-in styling.
 type Converter interface {
-	Convert(ctx context.Context, html []byte, format domain.Format, marking docx.Marking, dst io.Writer) error
+	Convert(ctx context.Context, html []byte, format domain.Format, template *docx.Template, marking docx.Marking, dst io.Writer) error
 }
 
 // LibreOffice converts documents with a headless `soffice` process.
@@ -31,10 +32,6 @@ type LibreOffice struct {
 	Binary string
 	// TempDir is where working directories are created ("" = os.TempDir()).
 	TempDir string
-	// Template, when set, is the company Word template applied to every
-	// document. PDFs are then produced from the templated DOCX, so both
-	// formats carry the same header, fonts and page setup.
-	Template *docx.Template
 	// Language is the documents' default language (BCP 47, e.g. fr-FR), which
 	// a tagged PDF declares for screen readers. Empty keeps the template's,
 	// or LibreOffice's en-US.
@@ -51,8 +48,10 @@ var filters = map[domain.Format]string{
 }
 
 // Convert produces the document; marking is stamped on every page of both
-// formats (see docx.Mark).
-func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.Format, marking docx.Marking, dst io.Writer) error {
+// formats (see docx.Mark). With a company template, the PDF is produced from
+// the templated DOCX, so both formats carry the same header, fonts and page
+// setup.
+func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.Format, template *docx.Template, marking docx.Marking, dst io.Writer) error {
 	if _, ok := filters[format]; !ok {
 		return domain.ErrInvalidFormat
 	}
@@ -76,7 +75,7 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 	if err != nil {
 		return err
 	}
-	document, err := l.finish(generated)
+	document, err := finish(generated, template)
 	if err != nil {
 		return err
 	}
@@ -103,13 +102,13 @@ func (l LibreOffice) Convert(ctx context.Context, html []byte, format domain.For
 }
 
 // finish turns the converter's raw DOCX into the document that is delivered.
-func (l LibreOffice) finish(generated []byte) ([]byte, error) {
-	if l.Template == nil {
+func finish(generated []byte, template *docx.Template) ([]byte, error) {
+	if template == nil {
 		return docx.Polish(generated)
 	}
-	document, err := l.Template.Apply(generated)
+	document, err := template.Apply(generated)
 	if err != nil {
-		return nil, fmt.Errorf("applying Word template %q: %w", l.Template.Name(), err)
+		return nil, fmt.Errorf("applying Word template %q: %w", template.Name(), err)
 	}
 	return document, nil
 }

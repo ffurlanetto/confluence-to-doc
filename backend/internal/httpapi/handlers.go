@@ -92,6 +92,12 @@ func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, err)
 		return
 	}
+	info, err := h.d.Templates.Info(r.Context())
+	if err != nil {
+		handleError(w, r, err)
+		return
+	}
+	templateName := info.Name
 	writeJSON(w, http.StatusOK, preferencesResponse{
 		ConfluenceBaseURL:     h.d.Accounts.ConfluenceURL().String(),
 		HasPAT:                p.HasPAT(),
@@ -105,7 +111,7 @@ func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
 		DefaultFormat:         string(p.DefaultFormat),
 		RetentionHours:        int(h.d.Retention.Hours()),
 		MaxPages:              h.d.MaxPages,
-		DocumentTemplate:      h.d.DocumentTemplate,
+		DocumentTemplate:      templateName,
 		Classifications:       classificationDTOs(h.d.Classifications),
 		DefaultClassification: h.d.DefaultClassification,
 	})

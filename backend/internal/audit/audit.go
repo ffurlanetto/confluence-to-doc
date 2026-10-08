@@ -43,6 +43,16 @@ const (
 	ActionAccountPurge      = "account.purge"
 	ActionTeamsSet          = "notifications.teams_set"
 	ActionTeamsDelete       = "notifications.teams_delete"
+	// Administration console.
+	ActionAdminQueueRead      = "admin.queue.read"
+	ActionAdminExportCancel   = "admin.export.cancel"
+	ActionAdminExportRetry    = "admin.export.retry"
+	ActionAdminUsersRead      = "admin.users.read"
+	ActionAdminUserBlock      = "admin.user.block"
+	ActionAdminUserUnblock    = "admin.user.unblock"
+	ActionAdminUsageRead      = "admin.usage.read"
+	ActionAdminTemplateUpload = "admin.template.upload"
+	ActionAdminTemplateReset  = "admin.template.reset"
 )
 
 // Target types.

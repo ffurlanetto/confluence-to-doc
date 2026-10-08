@@ -1,5 +1,10 @@
 import type {
+  AdminExport,
+  AdminUser,
   AuditFilter,
+  ExportStatus,
+  TemplateInfo,
+  Usage,
   Inbox,
   AuditPage,
   CreateExportRequest,
@@ -43,13 +48,37 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (res.status === 204) {
     return undefined as T;
   }
-  const data: unknown = await res.json().catch(() => undefined);
   if (!res.ok) {
-    const err = (data as { error?: { code?: string; message?: string } } | undefined)?.error;
-    throw new ApiError(res.status, err?.code ?? 'http_error', err?.message ?? `Erreur HTTP ${res.status}`);
+    throw await failure(res);
   }
-  return data as T;
+  return (await res.json().catch(() => undefined)) as T;
 }
+
+async function failure(res: Response): Promise<ApiError> {
+  const data: unknown = await res.json().catch(() => undefined);
+  const err = (data as { error?: { code?: string; message?: string } } | undefined)?.error;
+  return new ApiError(res.status, err?.code ?? 'http_error', err?.message ?? `HTTP error ${res.status}`);
+}
+
+/** Sends a file as the raw request body (the template upload). */
+async function upload<T>(path: string, file: File): Promise<T> {
+  const res = await fetch(path, {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/octet-stream',
+      'X-CSRF-Protection': '1',
+    },
+    body: file,
+    credentials: 'same-origin',
+  });
+  if (!res.ok) {
+    throw await failure(res);
+  }
+  return (await res.json()) as T;
+}
+
+const id = encodeURIComponent;
 
 export const api = {
   me: () => request<Me>('GET', '/api/me'),
@@ -92,6 +121,27 @@ export const api = {
     const query = params.toString();
     return request<AuditPage>('GET', `/api/admin/audit${query ? `?${query}` : ''}`);
   },
+
+  adminQueue: (statuses: ExportStatus[]) =>
+    request<{ exports: AdminExport[]; limit: number }>(
+      'GET',
+      `/api/admin/exports${statuses.length ? `?status=${statuses.join(',')}` : ''}`,
+    ),
+  cancelExport: (exportId: string) => request<Export>('POST', `/api/admin/exports/${id(exportId)}/cancel`),
+  retryExport: (exportId: string) => request<Export>('POST', `/api/admin/exports/${id(exportId)}/retry`),
+  adminUsers: (q: string) =>
+    request<{ users: AdminUser[]; limit: number }>(
+      'GET',
+      `/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    ),
+  blockUser: (userId: string, reason: string) =>
+    request<{ cancelledExports: number }>('POST', `/api/admin/users/${id(userId)}/block`, { reason }),
+  unblockUser: (userId: string) => request<undefined>('DELETE', `/api/admin/users/${id(userId)}/block`),
+  usage: (days: number) => request<Usage>('GET', `/api/admin/usage?days=${days}`),
+  template: () => request<TemplateInfo>('GET', '/api/admin/template'),
+  uploadTemplate: (file: File) =>
+    upload<TemplateInfo>(`/api/admin/template?name=${encodeURIComponent(file.name)}`, file),
+  deleteTemplate: () => request<undefined>('DELETE', '/api/admin/template'),
 
   logout: () => request<{ logoutUrl?: string }>('POST', '/auth/logout'),
 };

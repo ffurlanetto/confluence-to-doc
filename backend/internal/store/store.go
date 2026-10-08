@@ -57,17 +57,18 @@ func (s *Store) UpsertUser(ctx context.Context, issuer, subject, email, name str
 		INSERT INTO users (id, issuer, subject, email, name) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (issuer, subject) DO UPDATE
 		   SET email = EXCLUDED.email, name = EXCLUDED.name, updated_at = now()
-		RETURNING id, issuer, subject, email, name, is_admin, created_at`,
+		RETURNING id, issuer, subject, email, name, is_admin, created_at, blocked_at, blocked_reason`,
 		uuid.Must(uuid.NewV7()), issuer, subject, email, name,
-	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt)
+	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt, &u.BlockedAt, &u.BlockedReason)
 	return u, err
 }
 
 // GetUser returns a user by id.
 func (s *Store) GetUser(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	u := &domain.User{}
-	err := s.pool.QueryRow(ctx, `SELECT id, issuer, subject, email, name, is_admin, created_at FROM users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt)
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, issuer, subject, email, name, is_admin, created_at, blocked_at, blocked_reason FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt, &u.BlockedAt, &u.BlockedReason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -92,7 +93,8 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, sess domain
 	return err
 }
 
-// SessionUser returns the user owning a valid (non-expired) session.
+// SessionUser returns the user owning a valid (non-expired) session. A
+// blocked account has no valid session.
 func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (*domain.User, *domain.Session, error) {
 	u := &domain.User{}
 	sess := &domain.Session{}
@@ -100,7 +102,7 @@ func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (*domain.User
 		SELECT u.id, u.issuer, u.subject, u.email, u.name, u.is_admin, u.created_at,
 		       s.expires_at, s.sid, s.refresh_token, s.revalidate_at
 		  FROM sessions s JOIN users u ON u.id = s.user_id
-		 WHERE s.token_hash = $1 AND s.expires_at > now()`, tokenHash,
+		 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.blocked_at IS NULL`, tokenHash,
 	).Scan(&u.ID, &u.Issuer, &u.Subject, &u.Email, &u.Name, &u.IsAdmin, &u.CreatedAt,
 		&sess.ExpiresAt, &sess.SID, &sess.RefreshToken, &sess.RevalidateAt)
 	if errors.Is(err, pgx.ErrNoRows) {
