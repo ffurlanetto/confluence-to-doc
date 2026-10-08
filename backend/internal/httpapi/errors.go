@@ -11,6 +11,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/account"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/notify"
 )
 
 type errorBody struct {
@@ -61,6 +62,8 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusGone, "expired", "The document has expired and is no longer available.")
 	case errors.Is(err, domain.ErrInvalidFormat):
 		writeError(w, r, http.StatusBadRequest, "invalid_format", "Invalid format (expected pdf or docx).")
+	case errors.Is(err, notify.ErrInvalidTeamsURL):
+		writeError(w, r, http.StatusBadRequest, "invalid_teams_url", "This is not a Microsoft Teams workflow URL (https, on a Microsoft domain allowed by the administrator).")
 	case errors.Is(err, domain.ErrInvalidClassification):
 		writeError(w, r, http.StatusBadRequest, "invalid_classification", "Unknown classification.")
 	case errors.Is(err, domain.ErrInvalidPageID):

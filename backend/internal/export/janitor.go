@@ -25,6 +25,22 @@ type AccountPurger interface {
 	Purge(ctx context.Context) (warned, deleted int, err error)
 }
 
+// NotificationKeeper warns about expiring tokens and purges old notifications.
+type NotificationKeeper interface {
+	NotifyExpiringTokens(ctx context.Context, within time.Duration) (int, error)
+}
+
+// NotificationPurger deletes notifications older than keep.
+type NotificationPurger interface {
+	PurgeNotifications(ctx context.Context, keep time.Duration) (int64, error)
+}
+
+// patWarning is how long before its expiry a token is announced.
+const patWarning = 14 * 24 * time.Hour
+
+// notificationRetention is how long notifications stay in the application.
+const notificationRetention = 90 * 24 * time.Hour
+
 // historyRetention is how long expired exports stay listed (without file).
 const historyRetention = 30 * 24 * time.Hour
 
@@ -42,6 +58,9 @@ type Janitor struct {
 
 	keys     KeyRotator
 	accounts AccountPurger
+
+	notifications NotificationKeeper
+	notifyPurger  NotificationPurger
 }
 
 func NewJanitor(repo Repo, blobs storage.BlobStore, interval time.Duration) *Janitor {
@@ -58,6 +77,13 @@ func (j *Janitor) WithAudit(a Auditor, purger AuditPurger, retention time.Durati
 // WithKeyRotation re-encrypts, on every pass, the tokens an older key wrote.
 func (j *Janitor) WithKeyRotation(k KeyRotator) *Janitor {
 	j.keys = k
+	return j
+}
+
+// WithNotifications warns users of expiring tokens and purges old
+// notifications on every pass.
+func (j *Janitor) WithNotifications(k NotificationKeeper, p NotificationPurger) *Janitor {
+	j.notifications, j.notifyPurger = k, p
 	return j
 }
 
@@ -122,6 +148,16 @@ func (j *Janitor) RunOnce(ctx context.Context) int {
 		}
 	}
 	j.rotateKeys(ctx)
+	if j.notifications != nil {
+		if n, err := j.notifications.NotifyExpiringTokens(ctx, patWarning); err != nil {
+			slog.ErrorContext(ctx, "janitor: expiring tokens", "err", err)
+		} else if n > 0 {
+			slog.InfoContext(ctx, "janitor: users warned of an expiring token", "count", n)
+		}
+		if _, err := j.notifyPurger.PurgeNotifications(ctx, notificationRetention); err != nil {
+			slog.ErrorContext(ctx, "janitor: purging notifications", "err", err)
+		}
+	}
 	if j.accounts != nil {
 		warned, deleted, err := j.accounts.Purge(ctx)
 		if err != nil {

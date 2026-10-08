@@ -53,7 +53,20 @@ type WorkerConfig struct {
 	ShutdownGrace time.Duration
 	// Audit records the outcome of each export; nil records nothing.
 	Audit Auditor
+	// Notify tells the requester an export finished; nil tells no one.
+	Notify Notifier
 }
+
+// Notifier tells users about their exports (implemented by notify.Service).
+type Notifier interface {
+	ExportSucceeded(ctx context.Context, job *domain.Export, expires time.Time)
+	ExportFailed(ctx context.Context, job *domain.Export, reason string)
+}
+
+type silentNotifier struct{}
+
+func (silentNotifier) ExportSucceeded(context.Context, *domain.Export, time.Time) {}
+func (silentNotifier) ExportFailed(context.Context, *domain.Export, string)       {}
 
 // Auditor records security events (implemented by audit.Recorder).
 type Auditor interface {
@@ -83,6 +96,9 @@ func NewPool(repo Repo, clients ClientProvider, conv converter.Converter, blobs 
 	}
 	if cfg.Audit == nil {
 		cfg.Audit = audit.Discard{}
+	}
+	if cfg.Notify == nil {
+		cfg.Notify = silentNotifier{}
 	}
 	host, _ := os.Hostname()
 	return &Pool{
@@ -245,6 +261,7 @@ func (p *Pool) process(poolCtx context.Context, workerID string, job *domain.Exp
 	span.SetAttributes(attribute.Int("c2d.export.pages", pages), attribute.Int64("c2d.export.bytes", size))
 	p.cfg.Audit.Record(finishCtx, exportEvent(job, audit.ActionExportComplete, domain.AuditSuccess,
 		map[string]any{"pages": pages, "size": size}))
+	p.cfg.Notify.ExportSucceeded(finishCtx, job, p.now().Add(p.cfg.Retention))
 	log.Info("export succeeded", "pages", pages, "bytes", size, "duration", p.now().Sub(start).String())
 }
 
@@ -261,6 +278,7 @@ func (p *Pool) finish(ctx context.Context, log *slog.Logger, job *domain.Export,
 	if outcome == "failed" {
 		p.cfg.Audit.Record(ctx, exportEvent(job, audit.ActionExportFail, domain.AuditFailure,
 			map[string]any{"reason": UserMessage(cause), "attempts": job.Attempts}))
+		p.cfg.Notify.ExportFailed(ctx, job, UserMessage(cause))
 	}
 	if err := p.repo.FailExport(ctx, job.ID, workerID, UserMessage(cause), retry, delay, p.cfg.Retention); err != nil &&
 		!errors.Is(err, store.ErrLeaseLost) {

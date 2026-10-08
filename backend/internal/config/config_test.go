@@ -408,3 +408,33 @@ func TestSessionRevalidateInterval(t *testing.T) {
 		t.Fatalf("default: %v %v", cfg.SessionRevalidateInterval, err)
 	}
 }
+
+func TestSMTPConfig(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil || cfg.SMTP.Enabled() || len(cfg.TeamsWebhookHosts) != 3 {
+		t.Fatalf("defaults: smtp=%+v teams=%v err=%v", cfg.SMTP, cfg.TeamsWebhookHosts, err)
+	}
+	env := baseEnv()
+	env["SMTP_HOST"] = "smtp.example.com"
+	env["SMTP_FROM"] = "Confluence Export <noreply@example.com>"
+	cfg, err = load(getter(env))
+	if err != nil || !cfg.SMTP.Enabled() || cfg.SMTP.Port != 587 || cfg.SMTP.Security != "starttls" {
+		t.Fatalf("smtp: %+v %v", cfg.SMTP, err)
+	}
+	for k, v := range map[string]string{"SMTP_SECURITY": "ssl", "SMTP_FROM": "", "SMTP_PORT": "70000"} {
+		bad := baseEnv()
+		bad["SMTP_HOST"], bad["SMTP_FROM"] = "smtp.example.com", "noreply@example.com"
+		bad[k] = v
+		if k == "SMTP_FROM" {
+			delete(bad, "SMTP_FROM")
+		}
+		if _, err := load(getter(bad)); err == nil {
+			t.Errorf("%s=%q: want an error", k, v)
+		}
+	}
+	bad := baseEnv()
+	bad["SMTP_HOST"], bad["SMTP_FROM"], bad["SMTP_SECURITY"], bad["SMTP_USERNAME"] = "relay", "a@b.c", "none", "user"
+	if _, err := load(getter(bad)); err == nil {
+		t.Error("credentials over a plain connection must be refused")
+	}
+}

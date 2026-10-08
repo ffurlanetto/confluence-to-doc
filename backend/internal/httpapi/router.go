@@ -61,18 +61,31 @@ type AuditLog interface {
 	ListAuditEvents(ctx context.Context, f domain.AuditFilter) ([]domain.AuditEvent, error)
 }
 
+// Notifications are the user's messages and channel settings (implemented
+// by notify.Service).
+type Notifications interface {
+	List(ctx context.Context, userID uuid.UUID) ([]domain.Notification, int, error)
+	MarkRead(ctx context.Context, userID uuid.UUID) error
+	EmailAvailable() bool
+	SetPreferences(ctx context.Context, userID uuid.UUID, email, exports bool) error
+	SetTeamsWebhook(ctx context.Context, userID uuid.UUID, rawURL string) error
+	ClearTeamsWebhook(ctx context.Context, userID uuid.UUID) error
+	TestTeams(ctx context.Context, userID uuid.UUID) error
+}
+
 // Lifecycle deletes accounts (implemented by account.Lifecycle).
 type Lifecycle interface {
 	DeleteAccount(ctx context.Context, u *domain.User) error
 }
 
 type Deps struct {
-	Auth      Authenticator
-	Accounts  Accounts
-	Exports   Exports
-	Audit     Auditor
-	Lifecycle Lifecycle
-	AuditLog  AuditLog
+	Auth          Authenticator
+	Accounts      Accounts
+	Exports       Exports
+	Audit         Auditor
+	Lifecycle     Lifecycle
+	Notifications Notifications
+	AuditLog      AuditLog
 	// TrustedProxies may set X-Forwarded-For (see config.TrustedProxies).
 	TrustedProxies []netip.Prefix
 	// UserLimiter bounds API requests per user, AuthLimiter sign-in requests
@@ -133,6 +146,12 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/preferences", h.getPreferences)
 		r.Put("/preferences", h.putPreferences)
 		r.Put("/preferences/pat", h.putPAT)
+		r.Put("/preferences/notifications", h.putNotificationPreferences)
+		r.Put("/preferences/teams", h.putTeams)
+		r.Delete("/preferences/teams", h.deleteTeams)
+		r.Post("/preferences/teams/test", h.testTeams)
+		r.Get("/notifications", h.listNotifications)
+		r.Post("/notifications/read", h.readNotifications)
 		r.Delete("/preferences/pat", h.deletePAT)
 
 		r.Get("/confluence/pages", h.searchPages)

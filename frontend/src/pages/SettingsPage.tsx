@@ -1,8 +1,18 @@
 import { useState, type FormEvent } from 'react';
 
 import { ApiError } from '../api/client';
-import { useDeleteAccount, useDeletePat, usePreferences, useSetDefaultFormat, useSetPat } from '../api/hooks';
-import type { ExportFormat } from '../api/types';
+import {
+  useDeleteAccount,
+  useDeletePat,
+  useDeleteTeamsWebhook,
+  usePreferences,
+  useSetDefaultFormat,
+  useSetNotificationPreferences,
+  useSetPat,
+  useSetTeamsWebhook,
+  useTestTeams,
+} from '../api/hooks';
+import type { ExportFormat, Preferences } from '../api/types';
 import { daysUntil, formatDate, PAT_WARNING_DAYS } from '../lib/format';
 
 export function SettingsPage() {
@@ -21,6 +31,7 @@ export function SettingsPage() {
         baseUrl={p.confluenceBaseUrl}
       />
       <DefaultFormatCard value={p.defaultFormat} />
+      <NotificationsCard prefs={p} />
       <DocumentTemplateCard template={p.documentTemplate} />
       <DeleteAccountCard />
     </section>
@@ -115,6 +126,111 @@ function PatExpiry({ expiresAt }: { expiresAt: string }) {
       Expires on {formatDate(expiresAt)}
       {days <= PAT_WARNING_DAYS && ' — create a new token and save it here before then'}.
     </p>
+  );
+}
+
+function NotificationsCard({ prefs }: { prefs: Preferences }) {
+  const setPrefs = useSetNotificationPreferences();
+  const setTeams = useSetTeamsWebhook();
+  const deleteTeams = useDeleteTeamsWebhook();
+  const testTeams = useTestTeams();
+  const [url, setUrl] = useState('');
+
+  const save = (email: boolean, exports: boolean) => setPrefs.mutate({ email, exports });
+  const onTeams = (e: FormEvent) => {
+    e.preventDefault();
+    setTeams.mutate(url, { onSuccess: () => setUrl('') });
+  };
+
+  return (
+    <div className="card">
+      <h2>Notifications</h2>
+      <p className="muted small">
+        Notifications always appear under <em>Notifications</em> in this application. Notices about your
+        account (an expiring token, an account about to be deleted) are also sent on every channel you set up.
+      </p>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={prefs.notifyExports}
+          onChange={(e) => save(prefs.notifyEmail, e.target.checked)}
+        />
+        Tell me when an export is ready or failed
+      </label>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={prefs.notifyEmail && prefs.emailAvailable}
+          disabled={!prefs.emailAvailable || !prefs.email}
+          onChange={(e) => save(e.target.checked, prefs.notifyExports)}
+        />
+        By email{prefs.email ? ` to ${prefs.email}` : ''}
+        {!prefs.emailAvailable && <span className="muted small"> (not available on this server)</span>}
+      </label>
+
+      <form onSubmit={onTeams} aria-label="Microsoft Teams">
+        <h3>Microsoft Teams</h3>
+        <p className="muted small">
+          In Teams, create a workflow from the template <em>Send webhook alerts to a chat</em> (or to a
+          channel), then paste its URL here. It is stored encrypted and never shown again.
+        </p>
+        <p>
+          Status:{' '}
+          {prefs.hasTeamsWebhook ? (
+            <strong className="ok">connected</strong>
+          ) : (
+            <strong className="muted">not connected</strong>
+          )}
+        </p>
+        <label htmlFor="teams-url" className="label">
+          {prefs.hasTeamsWebhook ? 'Replace the workflow URL' : 'Workflow URL'}
+        </label>
+        <input
+          id="teams-url"
+          type="password"
+          className="input"
+          autoComplete="off"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        {setTeams.isError && (
+          <p className="error">
+            {setTeams.error instanceof ApiError ? setTeams.error.message : 'Unexpected error.'}
+          </p>
+        )}
+        {testTeams.isSuccess && <p className="ok">Test message sent: check Teams.</p>}
+        {testTeams.isError && (
+          <p className="error">
+            {testTeams.error instanceof ApiError ? testTeams.error.message : 'The test message failed.'}
+          </p>
+        )}
+        <div className="row">
+          <button type="submit" className="button primary" disabled={setTeams.isPending || url.trim() === ''}>
+            Save
+          </button>
+          {prefs.hasTeamsWebhook && (
+            <>
+              <button
+                type="button"
+                className="button"
+                onClick={() => testTeams.mutate()}
+                disabled={testTeams.isPending}
+              >
+                {testTeams.isPending ? 'Sending…' : 'Send a test message'}
+              </button>
+              <button
+                type="button"
+                className="button danger"
+                onClick={() => deleteTeams.mutate()}
+                disabled={deleteTeams.isPending}
+              >
+                Disconnect
+              </button>
+            </>
+          )}
+        </div>
+      </form>
+    </div>
   );
 }
 

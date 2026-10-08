@@ -13,6 +13,18 @@ data:
   SESSION_TTL: {{ .Values.sessionTtl | quote }}
   SESSION_REVALIDATE_INTERVAL: {{ .Values.sessionRevalidateInterval | quote }}
   ACCOUNT_RETENTION: {{ .Values.accounts.retention | quote }}
+  TEAMS_WEBHOOK_HOSTS: {{ join "," .Values.notifications.teamsWebhookHosts | quote }}
+  {{- with .Values.notifications.smtp }}
+  {{- if .host }}
+  SMTP_HOST: {{ .host | quote }}
+  SMTP_PORT: {{ .port | quote }}
+  SMTP_SECURITY: {{ .security | quote }}
+  SMTP_FROM: {{ .from | quote }}
+  {{- with .username }}
+  SMTP_USERNAME: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
   ACCOUNT_DELETION_NOTICE: {{ .Values.accounts.deletionNotice | quote }}
 
   CONFLUENCE_BASE_URL: {{ .Values.confluence.baseUrl | quote }}

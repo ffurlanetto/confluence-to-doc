@@ -263,3 +263,12 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   notice.
 - Data Center personal access tokens are the base64 of `<numeric id>:<secret bytes>`; the id is what
   `/rest/pat/latest/tokens/{id}` takes.
+
+### Notifications (ADR 0013)
+
+- The dispatcher receives a nil `EmailSender` interface when SMTP is off — `cmd/server` must not pass a nil
+  `*notify.Email`, which would be a non-nil interface and crash on the first email delivery.
+- `Teams.Validate` refuses non-443 ports, which `httptest` servers always use: tests call `sendTo`, which
+  skips validation, and test `Validate` separately.
+- Every page polls `/api/notifications` (the unread badge), so `mockApi` in the frontend tests answers it
+  with an empty inbox unless a test overrides it.

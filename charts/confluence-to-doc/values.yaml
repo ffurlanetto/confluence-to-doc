@@ -78,6 +78,24 @@ sessionTtl: 12h
 # -- How often a session is re-checked with the identity provider ("0" = never).
 sessionRevalidateInterval: 15m
 
+# -- Notifications. Email needs an SMTP relay (empty host = email off); every
+# user can connect their own Microsoft Teams workflow, restricted to these hosts.
+notifications:
+  smtp:
+    host: ""
+    port: 587
+    security: starttls # starttls | tls | none
+    from: ""
+    username: ""
+    # Stored in the chart-managed Secret; prefer existingSecret.
+    password: ""
+    existingSecret: ""
+    existingSecretKey: SMTP_PASSWORD
+  teamsWebhookHosts:
+    - logic.azure.com
+    - powerplatform.com
+    - webhook.office.com
+
 accounts:
   # -- Accounts unused for this long are deleted with their data ("0" = never),
   # after a warning `deletionNotice` beforehand.

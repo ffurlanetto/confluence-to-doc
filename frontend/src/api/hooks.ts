@@ -10,6 +10,7 @@ export const queryKeys = {
   search: (q: string) => ['search', q] as const,
   children: (id: string) => ['children', id] as const,
   audit: (filter: AuditFilter) => ['audit', filter] as const,
+  notifications: ['notifications'] as const,
 };
 
 export const useMe = () => useQuery({ queryKey: queryKeys.me, queryFn: api.me, staleTime: Infinity });
@@ -94,3 +95,42 @@ export const useAuditEvents = (filter: AuditFilter) =>
 
 /** Erases the user's account and data; the session ends with it. */
 export const useDeleteAccount = () => useMutation({ mutationFn: api.deleteAccount });
+
+/** The user's notifications, refreshed every 30 seconds for the unread badge. */
+export const useNotifications = () =>
+  useQuery({ queryKey: queryKeys.notifications, queryFn: api.notifications, refetchInterval: 30_000 });
+
+export const useMarkNotificationsRead = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.markNotificationsRead,
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.notifications }),
+  });
+};
+
+export const useSetNotificationPreferences = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ email, exports }: { email: boolean; exports: boolean }) =>
+      api.setNotificationPreferences(email, exports),
+    onSuccess: (prefs) => qc.setQueryData(queryKeys.preferences, prefs),
+  });
+};
+
+export const useSetTeamsWebhook = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (url: string) => api.setTeamsWebhook(url),
+    onSuccess: (prefs) => qc.setQueryData(queryKeys.preferences, prefs),
+  });
+};
+
+export const useDeleteTeamsWebhook = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.deleteTeamsWebhook,
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.preferences }),
+  });
+};
+
+export const useTestTeams = () => useMutation({ mutationFn: api.testTeams });

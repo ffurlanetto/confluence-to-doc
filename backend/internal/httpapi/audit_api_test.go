@@ -1,6 +1,8 @@
 package httpapi_test
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -123,4 +125,19 @@ func TestAuditPaginationAndValidation(t *testing.T) {
 	if len(page.Events) != 0 {
 		t.Fatalf("future window returned %d events", len(page.Events))
 	}
+}
+
+func readBody(r *http.Response) string {
+	b, _ := io.ReadAll(r.Body)
+	return string(b)
+}
+
+func eventDetails(p auditPage) []string {
+	var out []string
+	for _, e := range p.Events {
+		for k, v := range e.Details {
+			out = append(out, k+"="+fmt.Sprint(v))
+		}
+	}
+	return out
 }

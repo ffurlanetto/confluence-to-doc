@@ -18,6 +18,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/notify"
 )
 
 type handlers struct{ d Deps }
@@ -63,10 +64,16 @@ type preferencesResponse struct {
 	HasPAT            bool       `json:"hasPat"`
 	PATUpdatedAt      *time.Time `json:"patUpdatedAt,omitempty"`
 	PATExpiresAt      *time.Time `json:"patExpiresAt,omitempty"`
-	DefaultFormat     string     `json:"defaultFormat"`
-	RetentionHours    int        `json:"retentionHours"`
-	MaxPages          int        `json:"maxPages"`
-	DocumentTemplate  string     `json:"documentTemplate,omitempty"`
+	// Notification settings. The Teams URL itself is never returned.
+	Email            string `json:"email"`
+	EmailAvailable   bool   `json:"emailAvailable"`
+	NotifyEmail      bool   `json:"notifyEmail"`
+	NotifyExports    bool   `json:"notifyExports"`
+	HasTeamsWebhook  bool   `json:"hasTeamsWebhook"`
+	DefaultFormat    string `json:"defaultFormat"`
+	RetentionHours   int    `json:"retentionHours"`
+	MaxPages         int    `json:"maxPages"`
+	DocumentTemplate string `json:"documentTemplate,omitempty"`
 	// Classifications offered when exporting; the default applies when the
 	// user picks none.
 	Classifications       []classificationDTO `json:"classifications"`
@@ -90,6 +97,11 @@ func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
 		HasPAT:                p.HasPAT(),
 		PATUpdatedAt:          p.PATUpdatedAt,
 		PATExpiresAt:          p.PATExpiresAt,
+		Email:                 auth.UserFrom(r.Context()).Email,
+		EmailAvailable:        h.d.Notifications.EmailAvailable(),
+		NotifyEmail:           p.NotifyEmail,
+		NotifyExports:         p.NotifyExports,
+		HasTeamsWebhook:       len(p.EncryptedTeamsWebhook) > 0,
 		DefaultFormat:         string(p.DefaultFormat),
 		RetentionHours:        int(h.d.Retention.Hours()),
 		MaxPages:              h.d.MaxPages,
@@ -436,4 +448,96 @@ func fileName(title string, f domain.Format) string {
 		name = "export"
 	}
 	return fmt.Sprintf("%s.%s", name, f.Extension())
+}
+
+// ------------------------------------------------------- notifications
+
+type notificationDTO struct {
+	ID        uuid.UUID  `json:"id"`
+	Kind      string     `json:"kind"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	Link      string     `json:"link,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	ReadAt    *time.Time `json:"readAt,omitempty"`
+}
+
+func (h *handlers) listNotifications(w http.ResponseWriter, r *http.Request) {
+	list, unread, err := h.d.Notifications.List(r.Context(), auth.UserFrom(r.Context()).ID)
+	if err != nil {
+		handleError(w, r, err)
+		return
+	}
+	out := make([]notificationDTO, 0, len(list))
+	for _, n := range list {
+		out = append(out, notificationDTO{ID: n.ID, Kind: string(n.Kind), Title: n.Title, Body: n.Body, Link: n.Link,
+			CreatedAt: n.CreatedAt, ReadAt: n.ReadAt})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notifications": out, "unread": unread})
+}
+
+func (h *handlers) readNotifications(w http.ResponseWriter, r *http.Request) {
+	if err := h.d.Notifications.MarkRead(r.Context(), auth.UserFrom(r.Context()).ID); err != nil {
+		handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handlers) putNotificationPreferences(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email   bool `json:"email"`
+		Exports bool `json:"exports"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.d.Notifications.SetPreferences(r.Context(), auth.UserFrom(r.Context()).ID, req.Email, req.Exports); err != nil {
+		handleError(w, r, err)
+		return
+	}
+	h.record(r, domain.AuditEvent{Action: audit.ActionPreferences,
+		Details: map[string]any{"notifyEmail": req.Email, "notifyExports": req.Exports}})
+	h.getPreferences(w, r)
+}
+
+func (h *handlers) putTeams(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.URL) > 2048 {
+		handleError(w, r, notify.ErrInvalidTeamsURL)
+		return
+	}
+	if err := h.d.Notifications.SetTeamsWebhook(r.Context(), auth.UserFrom(r.Context()).ID, req.URL); err != nil {
+		handleError(w, r, err)
+		return
+	}
+	// The URL is a credential: only that one was set is recorded.
+	h.record(r, domain.AuditEvent{Action: audit.ActionTeamsSet})
+	h.getPreferences(w, r)
+}
+
+func (h *handlers) deleteTeams(w http.ResponseWriter, r *http.Request) {
+	if err := h.d.Notifications.ClearTeamsWebhook(r.Context(), auth.UserFrom(r.Context()).ID); err != nil {
+		handleError(w, r, err)
+		return
+	}
+	h.record(r, domain.AuditEvent{Action: audit.ActionTeamsDelete})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handlers) testTeams(w http.ResponseWriter, r *http.Request) {
+	if err := h.d.Notifications.TestTeams(r.Context(), auth.UserFrom(r.Context()).ID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			writeError(w, r, http.StatusConflict, "teams_missing", "Save a Teams workflow URL first.")
+			return
+		}
+		writeError(w, r, http.StatusBadGateway, "teams_failed", "Teams did not accept the test message. Check the workflow URL and that the workflow is turned on.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

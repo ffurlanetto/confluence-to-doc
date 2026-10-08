@@ -11,7 +11,7 @@ configurable (see [configuration.md](configuration.md)).
 | **Purpose** | Let employees export Confluence pages, with their child pages, to Word or PDF; secure the service and trace the use made of it |
 | **Legal basis** | Legitimate interest of the employer (internal tooling, security of information) — [to confirm] |
 | **Data subjects** | Employees and contractors who sign in to the service |
-| **Recipients** | The user themself; administrators of the service (audit trail); the security team (SIEM) |
+| **Recipients** | The user themself; administrators of the service (audit trail); the security team (SIEM); the company mail relay and Microsoft Teams, for the notifications the user chose |
 | **Transfers outside the EU** | [None / identity provider, hosting — to assess] |
 
 ## Data held
@@ -24,6 +24,8 @@ configurable (see [configuration.md](configuration.md)).
 | Sessions: hash of the session cookie, provider session id, encrypted refresh token | Sign-in | 12 hours at most | Ended by sign-out, provider logout or account deletion |
 | Export requests: page id and title, format, classification, status, dates | User | 30 days of history | Deleted with the account |
 | Generated documents | Confluence content the user can read | 48 hours | Carry the requester's name and email in their footer and properties, by design (traceability) |
+| Notifications: title, short text, link, read date | The service | 90 days | Deleted with the account |
+| Notification settings; Microsoft Teams workflow URL | Entered by the user | Same as the account | The URL is encrypted and never shown again |
 | Audit trail: action, date, user id and email, client IP address, user agent, target, outcome | Use of the service | 1 year in the database; per SIEM policy for the log copy | Kept after an account is deleted: security accountability ([to confirm]) |
 | Technical logs and traces | Use of the service | Per the logging platform's retention | No token, cookie or document content |
 

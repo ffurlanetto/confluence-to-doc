@@ -333,3 +333,65 @@ func TestTakeTokenIsSharedAndAtomic(t *testing.T) {
 		t.Fatal("buckets are independent")
 	}
 }
+
+func TestNotificationOutbox(t *testing.T) {
+	s := testutil.NewStore(t)
+	ctx := context.Background()
+	u, _ := s.UpsertUser(ctx, "iss", "n", "n@example.com", "N")
+	n := domain.Notification{ID: uuid.Must(uuid.NewV7()), UserID: u.ID, Kind: domain.NotifyExportSucceeded, Title: "t", Body: "b", Link: "/"}
+	if err := s.CreateNotification(ctx, n, []domain.Channel{domain.ChannelEmail, domain.ChannelTeams}); err != nil {
+		t.Fatal(err)
+	}
+
+	batch, err := s.ClaimDeliveries(ctx, 10, time.Minute)
+	if err != nil || len(batch) != 2 || batch[0].Email != "n@example.com" || batch[0].Attempts != 1 {
+		t.Fatalf("claim: %+v %v", batch, err)
+	}
+	if again, _ := s.ClaimDeliveries(ctx, 10, time.Minute); len(again) != 0 {
+		t.Fatal("claimed deliveries are leased, not handed out twice")
+	}
+	if err := s.FinishDelivery(ctx, n.ID, domain.ChannelEmail, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Second)
+	if err := s.FinishDelivery(ctx, n.ID, domain.ChannelTeams, errors.New("503"), &past); err != nil {
+		t.Fatal(err)
+	}
+	retry, _ := s.ClaimDeliveries(ctx, 10, time.Minute)
+	if len(retry) != 1 || retry[0].Channel != domain.ChannelTeams || retry[0].Attempts != 2 {
+		t.Fatalf("retry: %+v", retry)
+	}
+	_ = s.FinishDelivery(ctx, n.ID, domain.ChannelTeams, errors.New("gone"), nil)
+
+	list, unread, err := s.ListNotifications(ctx, u.ID, 10)
+	if err != nil || len(list) != 1 || unread != 1 || list[0].Kind != domain.NotifyExportSucceeded {
+		t.Fatalf("list: %+v unread=%d err=%v", list, unread, err)
+	}
+	_ = s.MarkNotificationsRead(ctx, u.ID)
+	if _, unread, _ = s.ListNotifications(ctx, u.ID, 10); unread != 0 {
+		t.Fatal("all read")
+	}
+	if n, _ := s.PurgeNotifications(ctx, 0); n != 1 {
+		t.Fatalf("purged %d", n)
+	}
+}
+
+func TestPATExpiryNotice(t *testing.T) {
+	s := testutil.NewStore(t)
+	ctx := context.Background()
+	u, _ := s.UpsertUser(ctx, "iss", "p", "", "")
+	soon := time.Now().Add(5 * 24 * time.Hour)
+	_ = s.SetPAT(ctx, u.ID, []byte("c"), &soon)
+	due, _ := s.PATsExpiringBefore(ctx, time.Now().Add(14*24*time.Hour), 10)
+	if len(due) != 1 || due[0].UserID != u.ID {
+		t.Fatalf("due: %+v", due)
+	}
+	_ = s.MarkPATExpiryNotified(ctx, u.ID)
+	if due, _ = s.PATsExpiringBefore(ctx, time.Now().Add(14*24*time.Hour), 10); len(due) != 0 {
+		t.Fatal("notified once")
+	}
+	_ = s.SetPAT(ctx, u.ID, []byte("c2"), &soon) // a new token starts over
+	if due, _ = s.PATsExpiringBefore(ctx, time.Now().Add(14*24*time.Hour), 10); len(due) != 1 {
+		t.Fatal("a new token must be announced again")
+	}
+}

@@ -41,6 +41,11 @@ services:
       # Traces and metrics go to the local Jaeger; unset to disable telemetry.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
       OTEL_SERVICE_NAME: confluence-to-doc
+      # Notification emails land in Mailpit: http://localhost:8025
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_SECURITY: ${SMTP_SECURITY:-none}
+      SMTP_FROM: ${SMTP_FROM:-Confluence Export <noreply@example.com>}
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +67,12 @@ services:
       - ./deploy/otel-collector.yaml:/etc/otel/config.yaml:ro
     depends_on:
       - jaeger
+
+  # Catches the notification emails; UI on :8025.
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "8025:8025" # Mailpit UI
 
   # Trace backend for local development; UI on :16686.
   jaeger:
