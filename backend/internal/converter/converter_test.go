@@ -3,6 +3,7 @@ package converter
 import (
 	"archive/zip"
 	"bytes"
+	"compress/zlib"
 	"context"
 	"errors"
 	"fmt"
@@ -604,6 +605,42 @@ func TestIsolatedEnv(t *testing.T) {
 	for _, leaked := range []string{"corp", "HOME=/root"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("env leaks %q: %s", leaked, got)
+		}
+	}
+}
+
+// pdfContent returns the PDF with every Flate stream inflated, so that the
+// structure and metadata LibreOffice compresses can be searched.
+func pdfContent(t *testing.T, pdf []byte) string {
+	t.Helper()
+	out := string(pdf)
+	re := regexp.MustCompile(`(?s)stream\r?\n(.*?)endstream`)
+	for _, m := range re.FindAllSubmatch(pdf, -1) {
+		r, err := zlib.NewReader(bytes.NewReader(m[1]))
+		if err != nil {
+			continue
+		}
+		b, _ := io.ReadAll(r)
+		out += string(b)
+	}
+	return out
+}
+
+// TestPDFIsTaggedForAccessibility checks the PDF carries its structure (for
+// screen readers), declares PDF/UA, and states the configured language.
+func TestPDFIsTaggedForAccessibility(t *testing.T) {
+	requireSoffice(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var out bytes.Buffer
+	conv := LibreOffice{Language: "fr-FR"}
+	if err := conv.Convert(ctx, []byte(sample), domain.FormatPDF, docx.Marking{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	content := pdfContent(t, out.Bytes())
+	for _, want := range []string{"/StructTreeRoot", "/MarkInfo", "/H1", "pdfuaid:part", "/Lang(fr-FR)"} {
+		if !strings.Contains(strings.ReplaceAll(content, "/Lang (", "/Lang("), want) {
+			t.Errorf("PDF lacks %s", want)
 		}
 	}
 }

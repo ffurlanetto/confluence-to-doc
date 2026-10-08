@@ -34,10 +34,15 @@ const flowTTL = 10 * time.Minute
 
 type Repo interface {
 	UpsertUser(ctx context.Context, issuer, subject, email, name string) (*domain.User, error)
-	CreateSession(ctx context.Context, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
+	CreateSession(ctx context.Context, tokenHash []byte, sess domain.Session) error
 	SessionUser(ctx context.Context, tokenHash []byte) (*domain.User, *domain.Session, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
 	RecordLogin(ctx context.Context, userID uuid.UUID, isAdmin bool) error
+
+	ClaimRevalidation(ctx context.Context, tokenHash []byte, next time.Time) (bool, error)
+	StoreRefreshToken(ctx context.Context, tokenHash, refreshToken []byte) error
+	DeleteSessionsBySID(ctx context.Context, sid string) (int64, error)
+	DeleteSessionsBySubject(ctx context.Context, issuer, subject string) (int64, error)
 }
 
 // Auditor records security events (implemented by audit.Recorder).
@@ -59,6 +64,10 @@ type Config struct {
 	// AdminGroups grants the admin role to members of any of these groups.
 	// Empty means nobody is an administrator.
 	AdminGroups []string
+	// RevalidateInterval is how often a session is checked with the
+	// provider (through its refresh token): a disabled account or an ended
+	// provider session then ends ours. 0 disables the check.
+	RevalidateInterval time.Duration
 }
 
 type Authenticator struct {
@@ -216,7 +225,12 @@ func (a *Authenticator) Callback(w http.ResponseWriter, r *http.Request) {
 
 	token := randomToken()
 	expires := a.now().Add(a.cfg.SessionTTL)
-	if err := a.repo.CreateSession(ctx, hashToken(token), user.ID, expires); err != nil {
+	sess, err := a.newSession(hashToken(token), user.ID, expires, rawClaims, tok)
+	if err != nil {
+		a.fail(w, r, "login failed", err)
+		return
+	}
+	if err := a.repo.CreateSession(ctx, hashToken(token), sess); err != nil {
 		a.fail(w, r, "login failed", err)
 		return
 	}
@@ -344,7 +358,8 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			unauthorized(w)
 			return
 		}
-		user, _, err := a.repo.SessionUser(r.Context(), hashToken(c.Value))
+		hash := hashToken(c.Value)
+		user, sess, err := a.repo.SessionUser(r.Context(), hash)
 		if errors.Is(err, domain.ErrNotFound) {
 			unauthorized(w)
 			return
@@ -352,6 +367,11 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		if err != nil {
 			slog.ErrorContext(r.Context(), "loading session", "err", err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if sess.RevalidateAt != nil && !a.now().Before(*sess.RevalidateAt) && !a.revalidate(r.Context(), hash, user, sess) {
+			clearCookie(w, a.sessionCookie, "/", a.cfg.SecureCookie)
+			unauthorized(w)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))

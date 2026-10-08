@@ -91,3 +91,6 @@ export const useAuditEvents = (filter: AuditFilter) =>
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor,
   });
+
+/** Erases the user's account and data; the session ends with it. */
+export const useDeleteAccount = () => useMutation({ mutationFn: api.deleteAccount });

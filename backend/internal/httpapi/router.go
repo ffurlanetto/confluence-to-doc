@@ -25,6 +25,7 @@ type Authenticator interface {
 	Login(http.ResponseWriter, *http.Request)
 	Callback(http.ResponseWriter, *http.Request)
 	Logout(http.ResponseWriter, *http.Request)
+	BackchannelLogout(http.ResponseWriter, *http.Request)
 	Middleware(http.Handler) http.Handler
 }
 
@@ -60,12 +61,18 @@ type AuditLog interface {
 	ListAuditEvents(ctx context.Context, f domain.AuditFilter) ([]domain.AuditEvent, error)
 }
 
+// Lifecycle deletes accounts (implemented by account.Lifecycle).
+type Lifecycle interface {
+	DeleteAccount(ctx context.Context, u *domain.User) error
+}
+
 type Deps struct {
-	Auth     Authenticator
-	Accounts Accounts
-	Exports  Exports
-	Audit    Auditor
-	AuditLog AuditLog
+	Auth      Authenticator
+	Accounts  Accounts
+	Exports   Exports
+	Audit     Auditor
+	Lifecycle Lifecycle
+	AuditLog  AuditLog
 	// TrustedProxies may set X-Forwarded-For (see config.TrustedProxies).
 	TrustedProxies []netip.Prefix
 	// UserLimiter bounds API requests per user, AuthLimiter sign-in requests
@@ -109,6 +116,9 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/login", d.Auth.Login)
 		r.Get("/callback", d.Auth.Callback)
 		r.With(csrfProtect(d.PublicURL)).Post("/logout", d.Auth.Logout)
+		// Called by the identity provider, server to server: the signed
+		// logout token is the proof, not a same-origin request.
+		r.Post("/backchannel-logout", d.Auth.BackchannelLogout)
 	})
 
 	h := &handlers{d: d}
@@ -119,6 +129,7 @@ func NewRouter(d Deps) http.Handler {
 		})
 
 		r.Get("/me", h.me)
+		r.Delete("/me", h.deleteMe)
 		r.Get("/preferences", h.getPreferences)
 		r.Put("/preferences", h.putPreferences)
 		r.Put("/preferences/pat", h.putPAT)

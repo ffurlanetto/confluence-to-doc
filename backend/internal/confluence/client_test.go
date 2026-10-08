@@ -2,12 +2,14 @@ package confluence_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence/fake"
@@ -190,5 +192,37 @@ func TestEveryRequestWaitsForTheLimiter(t *testing.T) {
 	limiter.err = context.DeadlineExceeded
 	if _, err := c.GetPage(context.Background(), "1", false); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a limiter error must stop the request, got %v", err)
+	}
+}
+
+func TestTokenExpiry(t *testing.T) {
+	dcToken := base64.StdEncoding.EncodeToString([]byte("123456789012:\x8a\x01secret"))
+	cases := map[string]struct {
+		token, expiring string
+		want            string
+	}{
+		"Data Center token":     {dcToken, "2026-12-31T10:00:00.000+0100", "2026-12-31T09:00:00Z"},
+		"RFC 3339 timestamp":    {dcToken, "2027-01-15T08:00:00Z", "2027-01-15T08:00:00Z"},
+		"token without expiry":  {dcToken, "", ""},
+		"not a Data Center PAT": {"plain-token", "2026-12-31T10:00:00.000+0100", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := fake.New(tc.token)
+			f.TokenExpiry = tc.expiring
+			srv := httptest.NewServer(f)
+			defer srv.Close()
+			u, _ := url.Parse(srv.URL)
+			got, err := confluence.NewClient(u, tc.token, srv.Client()).TokenExpiry(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case tc.want == "" && got != nil:
+				t.Fatalf("want no expiry, got %v", got)
+			case tc.want != "" && (got == nil || got.UTC().Format(time.RFC3339) != tc.want):
+				t.Fatalf("expiry = %v, want %s", got, tc.want)
+			}
+		})
 	}
 }

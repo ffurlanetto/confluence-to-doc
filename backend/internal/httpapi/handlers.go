@@ -46,12 +46,23 @@ func (h *handlers) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meResponse{ID: u.ID, Email: u.Email, Name: u.Name, IsAdmin: u.IsAdmin})
 }
 
+// deleteMe erases the user's account and everything attached to it: token,
+// preferences, sessions, exports and their files (GDPR right to erasure).
+func (h *handlers) deleteMe(w http.ResponseWriter, r *http.Request) {
+	if err := h.d.Lifecycle.DeleteAccount(r.Context(), auth.UserFrom(r.Context())); err != nil {
+		handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --------------------------------------------------------- preferences
 
 type preferencesResponse struct {
 	ConfluenceBaseURL string     `json:"confluenceBaseUrl"`
 	HasPAT            bool       `json:"hasPat"`
 	PATUpdatedAt      *time.Time `json:"patUpdatedAt,omitempty"`
+	PATExpiresAt      *time.Time `json:"patExpiresAt,omitempty"`
 	DefaultFormat     string     `json:"defaultFormat"`
 	RetentionHours    int        `json:"retentionHours"`
 	MaxPages          int        `json:"maxPages"`
@@ -78,6 +89,7 @@ func (h *handlers) getPreferences(w http.ResponseWriter, r *http.Request) {
 		ConfluenceBaseURL:     h.d.Accounts.ConfluenceURL().String(),
 		HasPAT:                p.HasPAT(),
 		PATUpdatedAt:          p.PATUpdatedAt,
+		PATExpiresAt:          p.PATExpiresAt,
 		DefaultFormat:         string(p.DefaultFormat),
 		RetentionHours:        int(h.d.Retention.Hours()),
 		MaxPages:              h.d.MaxPages,

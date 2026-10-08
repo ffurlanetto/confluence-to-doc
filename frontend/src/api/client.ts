@@ -52,6 +52,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const api = {
   me: () => request<Me>('GET', '/api/me'),
+  deleteAccount: () => request<undefined>('DELETE', '/api/me'),
 
   preferences: () => request<Preferences>('GET', '/api/preferences'),
   setDefaultFormat: (defaultFormat: ExportFormat) =>

@@ -20,6 +20,11 @@ type KeyRotator interface {
 	RotateKeys(ctx context.Context) (rotated, unreadable int, err error)
 }
 
+// AccountPurger deletes the accounts unused for too long.
+type AccountPurger interface {
+	Purge(ctx context.Context) (warned, deleted int, err error)
+}
+
 // historyRetention is how long expired exports stay listed (without file).
 const historyRetention = 30 * 24 * time.Hour
 
@@ -35,7 +40,8 @@ type Janitor struct {
 	auditPurger    AuditPurger
 	auditRetention time.Duration
 
-	keys KeyRotator
+	keys     KeyRotator
+	accounts AccountPurger
 }
 
 func NewJanitor(repo Repo, blobs storage.BlobStore, interval time.Duration) *Janitor {
@@ -52,6 +58,12 @@ func (j *Janitor) WithAudit(a Auditor, purger AuditPurger, retention time.Durati
 // WithKeyRotation re-encrypts, on every pass, the tokens an older key wrote.
 func (j *Janitor) WithKeyRotation(k KeyRotator) *Janitor {
 	j.keys = k
+	return j
+}
+
+// WithAccountPurge deletes inactive accounts on every pass.
+func (j *Janitor) WithAccountPurge(p AccountPurger) *Janitor {
+	j.accounts = p
 	return j
 }
 
@@ -110,6 +122,15 @@ func (j *Janitor) RunOnce(ctx context.Context) int {
 		}
 	}
 	j.rotateKeys(ctx)
+	if j.accounts != nil {
+		warned, deleted, err := j.accounts.Purge(ctx)
+		if err != nil {
+			slog.ErrorContext(ctx, "janitor: purging inactive accounts", "err", err)
+		}
+		if warned+deleted > 0 {
+			slog.InfoContext(ctx, "janitor: inactive accounts", "warned", warned, "deleted", deleted)
+		}
+	}
 	if n, err := j.repo.DeleteExpiredSessions(ctx); err == nil && n > 0 {
 		slog.InfoContext(ctx, "janitor: deleted expired sessions", "count", n)
 	}

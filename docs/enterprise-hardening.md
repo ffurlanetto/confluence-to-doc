@@ -29,9 +29,10 @@ taken with the product owner are recorded here so the lots stay consistent.
 3. **Isolation** — NetworkPolicy and seccomp in the chart; no external resource can reach LibreOffice;
    image scanning in CI; SBOM attached to releases. *(ADR 0010, done)*
 4. **Keys and load** — `ENCRYPTION_KEYS` key ring with rotation; global Confluence request budget; per-user
-   API rate limit. *(ADR 0011)*
+   API rate limit. *(ADR 0011, done)*
 5. **Lifecycle and GDPR** — periodic session revalidation and back-channel logout; PAT expiry warning;
    inactive account purge; self-service data deletion; processing record; tagged (accessible) PDF.
+   *(ADR 0012)* The inactivity warning is only logged until lot 6 brings the notification channels.
 6. **Notifications** — email, Teams, in-app.
 7. **Operations** — admin console (queue, cancel/retry, usage, blocking a user, Word template upload);
    alert rules, dashboard and SLOs; runbooks; backup and recovery; Playwright end-to-end tests in CI; load

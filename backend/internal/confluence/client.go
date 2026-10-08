@@ -4,6 +4,7 @@ package confluence
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -403,4 +405,44 @@ func isNumeric(s string) bool {
 		}
 	}
 	return true
+}
+
+// patID extracts the token id from a Data Center personal access token: the
+// token is the base64 encoding of "<numeric id>:<secret>".
+var patID = regexp.MustCompile(`^(\d{1,20}):`)
+
+// patTimeLayouts are the formats Atlassian products write timestamps in.
+var patTimeLayouts = []string{"2006-01-02T15:04:05.000-0700", "2006-01-02T15:04:05-0700", time.RFC3339Nano, time.RFC3339}
+
+// TokenExpiry returns when the client's personal access token expires, or
+// nil when it does not or when Confluence cannot say (Server before PATs,
+// a token in another format). Data Center 8.x and 9.x describe a token at
+// /rest/pat/latest/tokens/{id}.
+func (c *Client) TokenExpiry(ctx context.Context) (*time.Time, error) {
+	raw, err := base64.StdEncoding.DecodeString(c.token)
+	if err != nil {
+		return nil, nil //nolint:nilerr // not a Data Center token: no expiry to read
+	}
+	m := patID.FindSubmatch(raw)
+	if m == nil {
+		return nil, nil
+	}
+	var token struct {
+		ExpiringAt string `json:"expiringAt"`
+	}
+	err = c.getJSON(ctx, "/rest/pat/latest/tokens/"+string(m[1]), nil, &token)
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrForbidden):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case token.ExpiringAt == "":
+		return nil, nil // a token that never expires
+	}
+	for _, layout := range patTimeLayouts {
+		if t, err := time.Parse(layout, token.ExpiringAt); err == nil {
+			return &t, nil
+		}
+	}
+	return nil, fmt.Errorf("confluence: unreadable token expiry %q", token.ExpiringAt)
 }

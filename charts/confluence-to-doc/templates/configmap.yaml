@@ -11,6 +11,9 @@ data:
   LOG_FORMAT: {{ .Values.logging.format | quote }}
   STATIC_DIR: "/app/web"
   SESSION_TTL: {{ .Values.sessionTtl | quote }}
+  SESSION_REVALIDATE_INTERVAL: {{ .Values.sessionRevalidateInterval | quote }}
+  ACCOUNT_RETENTION: {{ .Values.accounts.retention | quote }}
+  ACCOUNT_DELETION_NOTICE: {{ .Values.accounts.deletionNotice | quote }}
 
   CONFLUENCE_BASE_URL: {{ .Values.confluence.baseUrl | quote }}
   CONFLUENCE_TIMEOUT: {{ .Values.confluence.timeout | quote }}
@@ -41,6 +44,9 @@ data:
   EXPORT_POLL_INTERVAL: {{ .Values.export.pollInterval | quote }}
   EXPORT_JANITOR_INTERVAL: {{ .Values.export.janitorInterval | quote }}
   DOCUMENT_CLASSIFICATIONS: {{ .Values.documents.classifications | quote }}
+  {{- with .Values.documents.language }}
+  DOCUMENT_LANGUAGE: {{ . | quote }}
+  {{- end }}
   {{- with .Values.documents.defaultClassification }}
   DOCUMENT_CLASSIFICATION: {{ . | quote }}
   {{- end }}

@@ -16,6 +16,8 @@ export interface Preferences {
   confluenceBaseUrl: string;
   hasPat: boolean;
   patUpdatedAt?: string;
+  /** When the token stops working, if Confluence reported it. */
+  patExpiresAt?: string;
   defaultFormat: ExportFormat;
   retentionHours: number;
   maxPages: number;
