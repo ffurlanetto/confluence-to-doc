@@ -54,19 +54,24 @@ test('the administration console shows the queue, the users, usage and the audit
   await page.getByLabel('Show').selectOption('all');
   await expect(page.getByRole('row').filter({ hasText: 'Tables' }).first()).toContainText('dev@example.com');
 
+  // Wait for each page's heading: until it shows, the previous page's rows
+  // (which also name dev@example.com) are still on screen.
   await page.getByRole('navigation', { name: 'Administration' }).getByRole('link', { name: 'Users' }).click();
+  await expect(page.getByRole('heading', { name: 'Users', exact: true })).toBeVisible();
   const me = page.getByRole('row').filter({ hasText: 'dev@example.com' });
   await expect(me).toContainText('Administrator');
   // Nobody can lock themselves out.
   await expect(page.getByRole('button', { name: 'Block dev@example.com' })).toHaveCount(0);
 
   await page.getByRole('navigation', { name: 'Administration' }).getByRole('link', { name: 'Usage' }).click();
+  await expect(page.getByRole('heading', { name: 'Usage', exact: true })).toBeVisible();
   const generated = page
     .getByRole('table', { name: 'Summary' })
     .getByRole('row', { name: /Documents generated/ });
   await expect(generated).not.toHaveText(/Documents generated\s*0$/);
 
   await page.getByRole('navigation', { name: 'Administration' }).getByRole('link', { name: 'Audit' }).click();
+  await expect(page.getByRole('heading', { name: 'Audit trail' })).toBeVisible();
   await page.getByLabel('Action').selectOption('admin.template.upload');
   await page.getByRole('button', { name: 'Apply' }).click();
   await expect(page.getByRole('row').filter({ hasText: 'Word template uploaded' }).first()).toBeVisible();
