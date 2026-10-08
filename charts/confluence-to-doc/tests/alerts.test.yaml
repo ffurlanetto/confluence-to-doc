@@ -27,21 +27,29 @@ tests:
               summary: Exports are queued but no worker has finished any in 30 minutes.
               runbook_url: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md#workers-stalled
 
-  - name: user mistakes do not burn the export error budget, system failures do
+  - name: user mistakes do not burn the export error budget
     interval: 1m
     input_series:
-      # 100 exports a minute succeed; 20 a minute fail because of the users,
-      # then, after an hour, 20 a minute fail because of the system.
+      # A fifth of the exports fail, all because of the users.
       - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="succeeded", c2d_export_format="pdf"}'
         values: '0+100x180'
       - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="failed", c2d_export_cause="user", c2d_export_format="pdf"}'
         values: '0+20x180'
-      - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="failed", c2d_export_cause="system", c2d_export_format="pdf"}'
-        values: '0x60 0+20x120'
     alert_rule_test:
-      - eval_time: 55m
+      - eval_time: 150m
         alertname: C2DExportErrorBudgetBurn
         exp_alerts: []
+
+  - name: system failures burn the export error budget
+    interval: 1m
+    input_series:
+      # A steady rate gives the same ratio in every window, so the value the
+      # description shows does not depend on which window fired.
+      - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="succeeded", c2d_export_format="pdf"}'
+        values: '0+100x180'
+      - series: 'c2d_exports_finished_total{job="confluence-to-doc", c2d_export_outcome="failed", c2d_export_cause="system", c2d_export_format="pdf"}'
+        values: '0+10x180'
+    alert_rule_test:
       - eval_time: 150m
         alertname: C2DExportErrorBudgetBurn
         exp_alerts:
@@ -49,7 +57,7 @@ tests:
               severity: critical
             exp_annotations:
               summary: Exports fail for reasons users cannot fix, fast enough to exhaust the monthly error budget.
-              description: 8.999% of exports fail with a system error (conversion, template, storage, Confluence outage).
+              description: 9.091% of exports fail with a system error (conversion, template, storage, Confluence outage).
               runbook_url: https://github.com/ffurlanetto/confluence-to-doc/blob/main/docs/operations/runbooks.md#export-failures
 
   - name: API server errors burn the availability budget

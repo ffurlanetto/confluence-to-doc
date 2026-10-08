@@ -291,8 +291,11 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   that applies `maxBody(64 << 10)`, since a nested `http.MaxBytesReader` cannot raise an outer limit.
 - The queue gauge `c2d.queue.exports` is observed by **every** instance from the same table: aggregate it
   with `max`, never `sum`.
-- In the alert unit tests, `absent()` with a regex matcher yields no `job` label, and a burn-rate alert's
-  `$value` is the first window's ratio, not the raw failure share.
+- In the alert unit tests, `absent()` with a regex matcher yields no `job` label. A burn-rate alert's
+  `$value` comes from whichever window matched, and differed between two runs of the same test: feed the
+  tests a **steady** rate, which gives the same ratio in every window, when an annotation shows `$value`.
+- In end-to-end tests, wait for the new page's heading after following a link: until React swaps the
+  route, the previous page's rows are still there and a `filter({ hasText })` can match them.
 - Playwright's `webServer` kills the command it started; `go run` leaves the compiled binary running, so
   the e2e servers are built and `exec`'d instead.
 - `@playwright/test` is pinned to the browser build of the CI install; locally,
