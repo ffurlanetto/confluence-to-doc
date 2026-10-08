@@ -70,9 +70,18 @@ type Client struct {
 	http       *http.Client
 	maxRetries int
 	sleep      func(context.Context, time.Duration) error
+	limiter    Limiter
+}
+
+// Limiter paces requests; Wait blocks until one may be sent.
+type Limiter interface {
+	Wait(ctx context.Context) error
 }
 
 type Option func(*Client)
+
+// WithLimiter makes every request, retries included, wait for l first.
+func WithLimiter(l Limiter) Option { return func(c *Client) { c.limiter = l } }
 
 // WithMaxRetries overrides the number of retries on 429/5xx responses.
 func WithMaxRetries(n int) Option { return func(c *Client) { c.maxRetries = n } }
@@ -309,6 +318,11 @@ func (c *Client) do(ctx context.Context, u *url.URL) (*http.Response, error) {
 		}
 		req.Header.Set("Authorization", "Bearer "+c.token)
 		req.Header.Set("Accept", "application/json")
+		if c.limiter != nil {
+			if err := c.limiter.Wait(ctx); err != nil {
+				return nil, err
+			}
+		}
 		resp, err := c.http.Do(req)
 		if err != nil {
 			if errors.Is(err, ErrForeignHost) {

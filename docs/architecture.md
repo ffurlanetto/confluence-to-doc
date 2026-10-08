@@ -63,6 +63,8 @@ immediately.
 | Maximum job duration                   | `EXPORT_JOB_TIMEOUT`             |
 | Maximum image size                     | `EXPORT_MAX_IMAGE_BYTES`         |
 | Confluence `Retry-After` handling      | automatic (REST client)          |
+| Requests per second to Confluence, all instances together | `CONFLUENCE_RATE_LIMIT` (a token bucket in PostgreSQL) |
+| API requests per user / sign-ins per address (429) | `API_RATE_LIMIT`, `AUTH_RATE_LIMIT` |
 
 Queue robustness:
 
@@ -145,7 +147,7 @@ One contract test suite (`storage/contract_test.go`) runs against both backends;
   `Secure` + `__Host-` prefix over HTTPS). Only its SHA-256 is stored.
 - **CSRF** — a mandatory `X-CSRF-Protection: 1` header plus `Origin` / `Sec-Fetch-Site` checks.
 - **PAT** — validated against Confluence before being saved, encrypted with AES-256-GCM bound to the user
-  id, never returned by the API, and only ever sent to the configured Confluence origin (redirects to
+  id under a key ring that can be rotated without users re-entering their tokens (ADR 0011), never returned by the API, and only ever sent to the configured Confluence origin (redirects to
   another host are blocked).
 - **Authorisation** — every export query filters on `user_id` (another user's export looks like a 404).
   Confluence permissions are those of the user's PAT. The administration API (`/api/admin/*`) requires the

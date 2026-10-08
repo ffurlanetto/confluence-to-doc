@@ -61,6 +61,13 @@ the values below map onto it.
 | `encryptionKey` **or** `existingEncryptionKeySecret` | 32 random bytes, base64                  |
 | `storage.s3.bucket` (when `storage.type: s3`) | Bucket for generated documents              |
 
+### Rotating the encryption key
+
+Set `encryptionKeyRing: true` and store `id:base64, id:base64` (new key first, old key named `default`)
+in the secret: the value is then passed as `ENCRYPTION_KEYS` and tokens are re-encrypted in the
+background. Remove the old key once the logs no longer report anything to rotate. See
+[docs/configuration.md](../../docs/configuration.md#rotating-the-encryption-key).
+
 ### Network policies
 
 `networkPolicy.enabled: true` installs a default-deny policy per component: the API accepts connections

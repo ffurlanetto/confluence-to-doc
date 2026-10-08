@@ -164,3 +164,31 @@ func TestParsePageRef(t *testing.T) {
 		}
 	}
 }
+
+type countingLimiter struct {
+	calls int
+	err   error
+}
+
+func (l *countingLimiter) Wait(context.Context) error { l.calls++; return l.err }
+
+func TestEveryRequestWaitsForTheLimiter(t *testing.T) {
+	f, _ := setup(t)
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	limiter := &countingLimiter{}
+	c := confluence.NewClient(u, "secret", srv.Client(), confluence.WithLimiter(limiter))
+	f.FailNext.Store(2)
+	if _, err := c.GetPage(context.Background(), "1", false); err != nil {
+		t.Fatal(err)
+	}
+	if limiter.calls != 3 {
+		t.Fatalf("limiter consulted %d times, want once per attempt (3)", limiter.calls)
+	}
+
+	limiter.err = context.DeadlineExceeded
+	if _, err := c.GetPage(context.Background(), "1", false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a limiter error must stop the request, got %v", err)
+	}
+}

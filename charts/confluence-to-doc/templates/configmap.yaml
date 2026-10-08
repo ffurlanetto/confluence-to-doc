@@ -15,6 +15,11 @@ data:
   CONFLUENCE_BASE_URL: {{ .Values.confluence.baseUrl | quote }}
   CONFLUENCE_TIMEOUT: {{ .Values.confluence.timeout | quote }}
   CONFLUENCE_FETCH_CONCURRENCY: {{ .Values.confluence.fetchConcurrency | quote }}
+  CONFLUENCE_RATE_LIMIT: {{ .Values.confluence.rateLimit | quote }}
+  CONFLUENCE_RATE_BURST: {{ .Values.confluence.rateBurst | quote }}
+  API_RATE_LIMIT: {{ .Values.apiRateLimit.perUser | quote }}
+  API_RATE_BURST: {{ .Values.apiRateLimit.burst | quote }}
+  AUTH_RATE_LIMIT: {{ .Values.apiRateLimit.signInPerAddress | quote }}
 
   OIDC_ISSUER_URL: {{ .Values.oidc.issuerUrl | quote }}
   OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}

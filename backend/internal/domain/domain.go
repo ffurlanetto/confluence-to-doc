@@ -19,6 +19,9 @@ var (
 	ErrInvalidPageID         = errors.New("invalid page id")
 	ErrExportNotDeletable    = errors.New("export is being processed and cannot be deleted")
 	ErrInvalidClassification = errors.New("unknown document classification")
+	// ErrPATUnreadable means no key of the ring can decrypt the stored token:
+	// the key that encrypted it was removed. The user must enter it again.
+	ErrPATUnreadable = errors.New("confluence personal access token cannot be decrypted")
 )
 
 type User struct {
