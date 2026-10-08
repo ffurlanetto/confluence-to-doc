@@ -43,6 +43,8 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "Resource not found.")
+	case errors.Is(err, domain.ErrPATUnreadable):
+		writeError(w, r, http.StatusConflict, "pat_unreadable", "Your Confluence personal access token can no longer be read. Enter it again in your preferences.")
 	case errors.Is(err, domain.ErrPATMissing):
 		writeError(w, r, http.StatusConflict, "pat_missing", "Set your Confluence personal access token (PAT) in your preferences.")
 	case errors.Is(err, account.ErrInvalidPAT), errors.Is(err, confluence.ErrUnauthorized):

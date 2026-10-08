@@ -364,7 +364,7 @@ func (p *Pool) generate(ctx context.Context, job *domain.Export, progress func(d
 
 func retryable(err error) bool {
 	switch {
-	case errors.Is(err, domain.ErrPATMissing),
+	case errors.Is(err, domain.ErrPATMissing), errors.Is(err, domain.ErrPATUnreadable),
 		errors.Is(err, exporter.ErrTooManyPages),
 		errors.Is(err, domain.ErrInvalidFormat),
 		// A template that cannot be applied fails the same way every time.
@@ -382,6 +382,8 @@ func UserMessage(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrPATMissing):
 		return "No Confluence personal access token (PAT) is configured in your preferences."
+	case errors.Is(err, domain.ErrPATUnreadable):
+		return "Your Confluence personal access token (PAT) can no longer be read. Enter it again in your preferences."
 	case errors.Is(err, confluence.ErrUnauthorized):
 		return "Your Confluence personal access token (PAT) is invalid or expired. Update it in your preferences."
 	case errors.Is(err, confluence.ErrForbidden):

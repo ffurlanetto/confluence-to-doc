@@ -144,6 +144,40 @@ func (s *Store) SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byt
 	return err
 }
 
+// EncryptedPAT is a stored token, as read for re-encryption.
+type EncryptedPAT struct {
+	UserID    uuid.UUID
+	Encrypted []byte
+}
+
+// PATsNotUnderKey returns tokens that were not encrypted with keyID, i.e. not
+// in the v2 layout naming that key (see internal/crypto), for users ordered
+// after the cursor `after`.
+func (s *Store) PATsNotUnderKey(ctx context.Context, keyID string, after uuid.UUID, limit int) ([]EncryptedPAT, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id, encrypted_pat FROM user_preferences
+		 WHERE encrypted_pat IS NOT NULL AND user_id > $3
+		   AND NOT (get_byte(encrypted_pat, 0) = 2
+		            AND substring(encrypted_pat FROM 3 FOR get_byte(encrypted_pat, 1)) = convert_to($1, 'UTF8'))
+		 ORDER BY user_id LIMIT $2`, keyID, limit, after)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (EncryptedPAT, error) {
+		var p EncryptedPAT
+		err := row.Scan(&p.UserID, &p.Encrypted)
+		return p, err
+	})
+}
+
+// ReplacePAT swaps a stored token for its re-encrypted form, unless the user
+// changed it in the meantime. It reports whether the row was updated.
+func (s *Store) ReplacePAT(ctx context.Context, userID uuid.UUID, old, replacement []byte) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE user_preferences SET encrypted_pat = $3 WHERE user_id = $1 AND encrypted_pat = $2`,
+		userID, old, replacement)
+	return tag.RowsAffected() == 1, err
+}
+
 func (s *Store) SetDefaultFormat(ctx context.Context, userID uuid.UUID, f domain.Format) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO user_preferences (user_id, default_format) VALUES ($1, $2)

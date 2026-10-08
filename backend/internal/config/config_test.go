@@ -38,8 +38,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SecureCookies() {
 		t.Error("default public URL is http, cookies should not be Secure")
 	}
-	if len(cfg.EncryptionKey) != 32 {
-		t.Errorf("key length = %d", len(cfg.EncryptionKey))
+	if len(cfg.EncryptionKeys) != 1 || cfg.EncryptionKeys[0].ID != "default" || len(cfg.EncryptionKeys[0].Secret) != 32 {
+		t.Errorf("encryption keys = %+v", cfg.EncryptionKeys)
 	}
 }
 
@@ -313,6 +313,62 @@ func TestClassifications(t *testing.T) {
 		env["DOCUMENT_CLASSIFICATIONS"] = bad
 		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), "DOCUMENT_CLASSIFICATIONS") {
 			t.Errorf("%q: want an error, got %v", bad, err)
+		}
+	}
+}
+
+func TestEncryptionKeyRing(t *testing.T) {
+	const k1, k2 = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=", "YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODk="
+	env := baseEnv()
+	delete(env, "ENCRYPTION_KEY")
+	env["ENCRYPTION_KEYS"] = "2026-10:" + k2 + ", default:" + k1
+	cfg, err := load(getter(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.EncryptionKeys) != 2 || cfg.EncryptionKeys[0].ID != "2026-10" || cfg.EncryptionKeys[1].ID != "default" {
+		t.Fatalf("key ring = %+v", cfg.EncryptionKeys)
+	}
+
+	for name, value := range map[string]string{
+		"missing id":    k1,
+		"bad base64":    "a:not-base64",
+		"short key":     "a:c2hvcnQ=",
+		"duplicate id":  "a:" + k1 + ",a:" + k2,
+		"reused secret": "a:" + k1 + ",b:" + k1,
+		"invalid id":    "not valid:" + k1,
+	} {
+		env["ENCRYPTION_KEYS"] = value
+		if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), "ENCRYPTION_KEYS") {
+			t.Errorf("%s: want an ENCRYPTION_KEYS error, got %v", name, err)
+		}
+	}
+
+	env["ENCRYPTION_KEYS"] = "default:" + k1
+	env["ENCRYPTION_KEY"] = k1
+	if _, err := load(getter(env)); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Errorf("both variables set: want an error, got %v", err)
+	}
+}
+
+func TestRateLimits(t *testing.T) {
+	cfg, err := load(getter(baseEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ConfluenceRateLimit != 10 || cfg.ConfluenceRateBurst != 20 || cfg.APIRateLimit != 300 || cfg.APIRateBurst != 60 || cfg.AuthRateLimit != 30 {
+		t.Errorf("defaults: %v %v %v %v %v", cfg.ConfluenceRateLimit, cfg.ConfluenceRateBurst, cfg.APIRateLimit, cfg.APIRateBurst, cfg.AuthRateLimit)
+	}
+	env := baseEnv()
+	env["CONFLUENCE_RATE_LIMIT"] = "0"
+	if cfg, err = load(getter(env)); err != nil || cfg.ConfluenceRateLimit != 0 {
+		t.Errorf("0 disables the budget: %v %v", cfg, err)
+	}
+	for k, v := range map[string]string{"CONFLUENCE_RATE_LIMIT": "-1", "API_RATE_BURST": "0", "AUTH_RATE_LIMIT": "-5"} {
+		env := baseEnv()
+		env[k] = v
+		if _, err := load(getter(env)); err == nil {
+			t.Errorf("%s=%s: want an error", k, v)
 		}
 	}
 }

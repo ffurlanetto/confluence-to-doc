@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,5 +297,39 @@ func TestRecordLogin(t *testing.T) {
 	got, _, err := s.SessionUser(ctx, hash)
 	if err != nil || !got.IsAdmin {
 		t.Fatalf("session user admin=%v err=%v", got != nil && got.IsAdmin, err)
+	}
+}
+
+func TestTakeTokenIsSharedAndAtomic(t *testing.T) {
+	s := testutil.NewStore(t)
+	ctx := context.Background()
+
+	// 20 concurrent callers against a bucket of 5 that refills slowly: exactly
+	// 5 get a token, whatever the interleaving.
+	var granted atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, _, err := s.TakeToken(ctx, "test", 0.01, 5)
+			if err != nil {
+				t.Error(err)
+			}
+			if ok {
+				granted.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := granted.Load(); n != 5 {
+		t.Fatalf("granted %d tokens, want the burst of 5", n)
+	}
+	ok, wait, err := s.TakeToken(ctx, "test", 0.01, 5)
+	if ok || err != nil || wait < 90*time.Second {
+		t.Fatalf("empty bucket: ok=%v wait=%v err=%v", ok, wait, err)
+	}
+	if ok, _, _ := s.TakeToken(ctx, "other", 1, 1); !ok {
+		t.Fatal("buckets are independent")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
 )
 
@@ -54,11 +55,22 @@ type Config struct {
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For header is
 	// believed when recording a client's address. Empty trusts nobody.
 	TrustedProxies []netip.Prefix
-	// EncryptionKey is a 32-byte AES-256 key used to encrypt PATs at rest.
-	EncryptionKey []byte
+	// EncryptionKeys encrypt PATs at rest: the first encrypts, all decrypt.
+	// From ENCRYPTION_KEYS, or a single ENCRYPTION_KEY named "default".
+	EncryptionKeys []crypto.Key
 
 	ConfluenceBaseURL *url.URL
 	ConfluenceTimeout time.Duration
+	// ConfluenceRateLimit is the request budget, per second, that all
+	// instances together may spend on Confluence (0 = unlimited).
+	ConfluenceRateLimit float64
+	ConfluenceRateBurst int
+
+	// APIRateLimit and AuthRateLimit are requests per minute, per user on the
+	// API and per client address on the sign-in endpoints (0 = unlimited).
+	APIRateLimit  int
+	APIRateBurst  int
+	AuthRateLimit int
 
 	Export ExportConfig
 	// Telemetry configures OpenTelemetry; it is enabled by an OTLP endpoint.
@@ -186,10 +198,15 @@ func load(getenv func(string) string) (*Config, error) {
 			GroupsClaim:  e.str("OIDC_GROUPS_CLAIM", "groups"),
 			AdminGroups:  e.csv("OIDC_ADMIN_GROUPS"),
 		},
-		SessionTTL:        e.duration("SESSION_TTL", 12*time.Hour),
-		AuditRetention:    e.duration("AUDIT_RETENTION", 365*24*time.Hour),
-		TrustedProxies:    e.prefixes("TRUSTED_PROXIES"),
-		ConfluenceTimeout: e.duration("CONFLUENCE_TIMEOUT", 30*time.Second),
+		SessionTTL:          e.duration("SESSION_TTL", 12*time.Hour),
+		AuditRetention:      e.duration("AUDIT_RETENTION", 365*24*time.Hour),
+		TrustedProxies:      e.prefixes("TRUSTED_PROXIES"),
+		ConfluenceTimeout:   e.duration("CONFLUENCE_TIMEOUT", 30*time.Second),
+		ConfluenceRateLimit: e.float("CONFLUENCE_RATE_LIMIT", 10),
+		ConfluenceRateBurst: e.int("CONFLUENCE_RATE_BURST", 20),
+		APIRateLimit:        e.int("API_RATE_LIMIT", 300),
+		APIRateBurst:        e.int("API_RATE_BURST", 60),
+		AuthRateLimit:       e.int("AUTH_RATE_LIMIT", 30),
 		Export: ExportConfig{
 			StorageDir:        e.str("EXPORT_STORAGE_DIR", "./data/exports"),
 			Retention:         e.duration("EXPORT_RETENTION", 48*time.Hour),
@@ -228,7 +245,7 @@ func load(getenv func(string) string) (*Config, error) {
 	cfg.S3.UsePathStyle = e.bool("S3_FORCE_PATH_STYLE", cfg.S3.Endpoint != "")
 	cfg.PublicURL = e.url("PUBLIC_URL", "http://localhost:8080")
 	cfg.ConfluenceBaseURL = e.url("CONFLUENCE_BASE_URL", "")
-	cfg.EncryptionKey = e.base64Key("ENCRYPTION_KEY", 32)
+	cfg.EncryptionKeys = e.encryptionKeys()
 
 	if len(e.errs) > 0 {
 		return nil, errors.Join(e.errs...)
@@ -257,6 +274,12 @@ func (c *Config) validate() error {
 	}
 	if c.Export.Retention <= 0 {
 		errs = append(errs, errors.New("EXPORT_RETENTION must be > 0"))
+	}
+	if c.ConfluenceRateLimit < 0 || c.APIRateLimit < 0 || c.AuthRateLimit < 0 {
+		errs = append(errs, errors.New("CONFLUENCE_RATE_LIMIT, API_RATE_LIMIT and AUTH_RATE_LIMIT must be >= 0 (0 disables the limit)"))
+	}
+	if c.ConfluenceRateBurst < 1 || c.APIRateBurst < 1 {
+		errs = append(errs, errors.New("CONFLUENCE_RATE_BURST and API_RATE_BURST must be >= 1"))
 	}
 	if c.AuditRetention < minAuditRetention {
 		errs = append(errs, fmt.Errorf("AUDIT_RETENTION must be at least %s", minAuditRetention))
@@ -455,6 +478,39 @@ func (e *envReader) url(key, def string) *url.URL {
 		return nil
 	}
 	return u
+}
+
+// encryptionKeys reads ENCRYPTION_KEYS ("id:base64, id:base64", newest
+// first) or, for a single key, ENCRYPTION_KEY.
+func (e *envReader) encryptionKeys() []crypto.Key {
+	ring, single := e.str("ENCRYPTION_KEYS", ""), e.str("ENCRYPTION_KEY", "")
+	switch {
+	case ring != "" && single != "":
+		e.errs = append(e.errs, errors.New("set ENCRYPTION_KEYS or ENCRYPTION_KEY, not both: name the old key \"default\" in ENCRYPTION_KEYS"))
+		return nil
+	case ring == "":
+		if k := e.base64Key("ENCRYPTION_KEY", 32); k != nil {
+			return []crypto.Key{{ID: crypto.DefaultKeyID, Secret: k}}
+		}
+		return nil
+	}
+	var keys []crypto.Key
+	for _, item := range e.csv("ENCRYPTION_KEYS") {
+		id, encoded, ok := strings.Cut(item, ":")
+		secret, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+		if !ok || err != nil || len(secret) != 32 {
+			e.errs = append(e.errs, fmt.Errorf("ENCRYPTION_KEYS: %q must be id:<32 random bytes, base64>", strings.TrimSpace(id)))
+			continue
+		}
+		keys = append(keys, crypto.Key{ID: strings.TrimSpace(id), Secret: secret})
+	}
+	if len(e.errs) == 0 {
+		// Ids, duplicates and reused secrets are checked where the ring is built.
+		if _, err := crypto.NewKeyRing(keys); err != nil {
+			e.errs = append(e.errs, fmt.Errorf("ENCRYPTION_KEYS: %w", err))
+		}
+	}
+	return keys
 }
 
 func (e *envReader) base64Key(key string, size int) []byte {

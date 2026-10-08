@@ -50,6 +50,11 @@ type Auditor interface {
 	Record(ctx context.Context, e domain.AuditEvent)
 }
 
+// Limiter is implemented by ratelimit.Keyed.
+type Limiter interface {
+	Allow(key string) (bool, time.Duration)
+}
+
 // AuditLog reads the audit trail back.
 type AuditLog interface {
 	ListAuditEvents(ctx context.Context, f domain.AuditFilter) ([]domain.AuditEvent, error)
@@ -63,11 +68,15 @@ type Deps struct {
 	AuditLog AuditLog
 	// TrustedProxies may set X-Forwarded-For (see config.TrustedProxies).
 	TrustedProxies []netip.Prefix
-	Ready          func(context.Context) error
-	PublicURL      *url.URL
-	StaticDir      string
-	Retention      time.Duration
-	MaxPages       int
+	// UserLimiter bounds API requests per user, AuthLimiter sign-in requests
+	// per client address. Nil means no limit.
+	UserLimiter Limiter
+	AuthLimiter Limiter
+	Ready       func(context.Context) error
+	PublicURL   *url.URL
+	StaticDir   string
+	Retention   time.Duration
+	MaxPages    int
 	// DocumentTemplate is the company Word template file name, empty when
 	// documents use the built-in styling.
 	DocumentTemplate string
@@ -96,6 +105,7 @@ func NewRouter(d Deps) http.Handler {
 	})
 
 	r.Route("/auth", func(r chi.Router) {
+		r.Use(limitBy(d.AuthLimiter, clientKey))
 		r.Get("/login", d.Auth.Login)
 		r.Get("/callback", d.Auth.Callback)
 		r.With(csrfProtect(d.PublicURL)).Post("/logout", d.Auth.Logout)
@@ -103,7 +113,7 @@ func NewRouter(d Deps) http.Handler {
 
 	h := &handlers{d: d}
 	r.Route("/api", func(r chi.Router) {
-		r.Use(csrfProtect(d.PublicURL), d.Auth.Middleware, middleware.NoCache)
+		r.Use(csrfProtect(d.PublicURL), d.Auth.Middleware, limitBy(d.UserLimiter, userKey), middleware.NoCache)
 		r.Use(func(next http.Handler) http.Handler {
 			return http.MaxBytesHandler(next, 64<<10) // JSON payloads are tiny
 		})

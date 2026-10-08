@@ -34,6 +34,7 @@ const (
 	ActionExportExpire   = "export.expire"
 	ActionAdminAccess    = "admin.access"
 	ActionAuditRead      = "admin.audit.read"
+	ActionKeyRotation    = "keys.rotate"
 )
 
 // Target types.
@@ -162,6 +163,9 @@ type ctxKey struct{}
 func WithRequest(ctx context.Context, info RequestInfo) context.Context {
 	return context.WithValue(ctx, ctxKey{}, info)
 }
+
+// RequestFrom returns the request metadata attached by WithRequest.
+func RequestFrom(ctx context.Context) RequestInfo { return requestFrom(ctx) }
 
 func requestFrom(ctx context.Context) RequestInfo {
 	info, _ := ctx.Value(ctxKey{}).(RequestInfo)

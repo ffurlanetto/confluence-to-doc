@@ -156,7 +156,7 @@ spec:
               key: {{ $ctx.Values.oidc.existingSecretKey }}
         {{- end }}
         {{- if $ctx.Values.existingEncryptionKeySecret }}
-        - name: ENCRYPTION_KEY
+        - name: {{ ternary "ENCRYPTION_KEYS" "ENCRYPTION_KEY" $ctx.Values.encryptionKeyRing }}
           valueFrom:
             secretKeyRef:
               name: {{ $ctx.Values.existingEncryptionKeySecret }}

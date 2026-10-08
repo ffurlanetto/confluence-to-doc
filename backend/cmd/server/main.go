@@ -27,6 +27,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/export"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/httpapi"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/observability"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/ratelimit"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/storage"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 )
@@ -88,7 +89,7 @@ func run() error {
 		return fmt.Errorf("migrating database: %w", err)
 	}
 
-	sealer, err := crypto.NewSealer(cfg.EncryptionKey)
+	sealer, err := crypto.NewKeyRing(cfg.EncryptionKeys)
 	if err != nil {
 		return err
 	}
@@ -97,6 +98,10 @@ func run() error {
 		return err
 	}
 	accounts := account.NewService(db, sealer, cfg.ConfluenceBaseURL, cfg.ConfluenceTimeout)
+	if cfg.ConfluenceRateLimit > 0 {
+		// One budget for the whole deployment, however many instances run.
+		accounts.WithLimiter(ratelimit.NewShared(db, "confluence", cfg.ConfluenceRateLimit, float64(cfg.ConfluenceRateBurst)))
+	}
 	auditor := audit.New(db, nil)
 
 	// The company Word template is validated at startup: a broken template
@@ -134,7 +139,8 @@ func run() error {
 			Audit:             auditor,
 		})
 		notify = pool.Notify
-		janitor := export.NewJanitor(db, blobs, cfg.Export.JanitorInterval).WithAudit(auditor, db, cfg.AuditRetention)
+		janitor := export.NewJanitor(db, blobs, cfg.Export.JanitorInterval).WithAudit(auditor, db, cfg.AuditRetention).
+			WithKeyRotation(accounts)
 		wg.Add(2)
 		go func() { defer wg.Done(); pool.Run(ctx) }()
 		go func() { defer wg.Done(); janitor.Run(ctx) }()
@@ -159,6 +165,8 @@ func run() error {
 			Audit:                 auditor,
 			AuditLog:              db,
 			TrustedProxies:        cfg.TrustedProxies,
+			UserLimiter:           keyedLimiter(cfg.APIRateLimit, cfg.APIRateBurst),
+			AuthLimiter:           keyedLimiter(cfg.AuthRateLimit, max(cfg.AuthRateLimit/3, 1)),
 			Ready:                 db.Ping,
 			PublicURL:             cfg.PublicURL,
 			StaticDir:             cfg.StaticDir,
@@ -260,6 +268,15 @@ func templateName(t *docx.Template) string {
 		return ""
 	}
 	return t.Name()
+}
+
+// keyedLimiter returns nil, meaning no limit, when perMinute is 0. The
+// explicit nil interface matters: a typed nil would be called.
+func keyedLimiter(perMinute, burst int) httpapi.Limiter {
+	if perMinute <= 0 {
+		return nil
+	}
+	return ratelimit.NewKeyed(perMinute, burst)
 }
 
 func newBlobStore(ctx context.Context, cfg *config.Config) (storage.BlobStore, error) {

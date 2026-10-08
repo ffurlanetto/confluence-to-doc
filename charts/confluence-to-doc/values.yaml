@@ -25,6 +25,17 @@ confluence:
   timeout: 30s
   # Parallel Confluence requests per export.
   fetchConcurrency: 4
+  # -- Requests per second that all pods together may send to Confluence
+  # (0 = unlimited), and the burst allowed above that pace.
+  rateLimit: 10
+  rateBurst: 20
+
+# -- Requests per minute per user on the API, and per client address on the
+# sign-in endpoints (0 = unlimited). Counted per API pod.
+apiRateLimit:
+  perUser: 300
+  burst: 60
+  signInPerAddress: 30
 
 # -- External PostgreSQL. No database is deployed by this chart.
 database:
@@ -58,6 +69,10 @@ oidc:
 encryptionKey: ""
 existingEncryptionKeySecret: ""
 existingEncryptionKeySecretKey: ENCRYPTION_KEY
+# -- The value is a key ring, "id:base64, id:base64" with the current key first,
+# passed as ENCRYPTION_KEYS: this is how keys are rotated without users having
+# to enter their tokens again (see docs/configuration.md).
+encryptionKeyRing: false
 
 sessionTtl: 12h
 

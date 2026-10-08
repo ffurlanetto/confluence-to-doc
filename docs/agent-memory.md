@@ -234,3 +234,15 @@ debugging session uncovers a non-obvious fact, add it here rather than in a comm
   conversion still succeeds. `isolatedEnv` also drops the server's own proxy variables and `no_proxy`.
 - `unshare --net` would be stronger but needs user namespaces, denied by the `RuntimeDefault` seccomp
   profile the chart applies.
+
+### Key ring and rate limits (ADR 0011)
+
+- `crypto.Sealer` is a key ring. v2 ciphertexts carry the key id, authenticated through the associated
+  data (`keyedAD`); v1 ciphertexts (before key rings) have none and are tried against every key. The id is
+  a hint: an unknown id is tried against every key too, so renaming a key loses nothing.
+- `store.PATsNotUnderKey` selects the tokens to rotate **in SQL**, by reading the v2 header bytes
+  (`get_byte`, `substring`); keep it in step with the layout in `internal/crypto`.
+- The shared Confluence bucket uses `clock_timestamp()`, not `now()`: `now()` is frozen for the whole
+  transaction and would refill nothing between two statements of the same transaction.
+- `keyedLimiter` in `cmd/server` returns an untyped nil when a limit is disabled: a nil `*ratelimit.Keyed`
+  stored in the `httpapi.Limiter` interface would not compare equal to nil and would be called.

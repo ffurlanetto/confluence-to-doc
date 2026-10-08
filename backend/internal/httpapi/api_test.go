@@ -65,7 +65,7 @@ type api struct {
 
 func newAPI(t *testing.T) *api { return newAPIWithWorker(t, true) }
 
-func newAPIWithWorker(t *testing.T, startWorker bool) *api {
+func newAPIWithWorker(t *testing.T, startWorker bool, opts ...func(*httpapi.Deps)) *api {
 	t.Helper()
 	s := testutil.NewStore(t)
 
@@ -92,7 +92,7 @@ func newAPIWithWorker(t *testing.T, startWorker bool) *api {
 	}
 
 	pub, _ := url.Parse("http://app.test")
-	router := httpapi.NewRouter(httpapi.Deps{
+	deps := httpapi.Deps{
 		Auth:                  headerAuth{store: s},
 		Accounts:              acc,
 		Exports:               export.NewService(s, blobs, export.Limits{MaxAttempts: 2, MaxActivePerUser: 3}, pool.Notify),
@@ -104,7 +104,11 @@ func newAPIWithWorker(t *testing.T, startWorker bool) *api {
 		MaxPages:              50,
 		Classifications:       []domain.Classification{{Label: "Internal"}, {Label: "Confidential", Watermark: true}},
 		DefaultClassification: "Internal",
-	})
+	}
+	for _, o := range opts {
+		o(&deps)
+	}
+	router := httpapi.NewRouter(deps)
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 	return &api{t: t, srv: srv}

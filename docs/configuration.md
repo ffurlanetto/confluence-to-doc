@@ -12,9 +12,10 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `OIDC_CLIENT_ID`      | OAuth2 client id (confidential client)                                                |
 | `OIDC_CLIENT_SECRET`  | Client secret                                                                         |
 | `CONFLUENCE_BASE_URL` | Confluence Server/Data Center base URL (including any context path)                   |
-| `ENCRYPTION_KEY`      | 32 random bytes, base64 (`openssl rand -base64 32`), used to encrypt the users' PATs  |
+| `ENCRYPTION_KEY`      | 32 random bytes, base64 (`openssl rand -base64 32`), used to encrypt the users' PATs — or `ENCRYPTION_KEYS`, a key ring (see [Rotating the encryption key](#rotating-the-encryption-key)) |
 
-> ⚠️ Changing `ENCRYPTION_KEY` makes existing PATs unreadable: every user has to enter theirs again.
+> ⚠️ Replacing the key outright makes existing PATs unreadable: every user has to enter theirs again.
+> Rotate it through `ENCRYPTION_KEYS` instead.
 
 ## Optional
 
@@ -34,6 +35,11 @@ All configuration comes from environment variables (12-factor), loaded and valid
 | `TRUSTED_PROXIES`              | _(empty)_               | Comma-separated CIDRs of the reverse proxies allowed to set `X-Forwarded-For` (client address in the audit trail) |
 | `CONFLUENCE_TIMEOUT`           | `30s`                   | Timeout of a single Confluence request                          |
 | `CONFLUENCE_FETCH_CONCURRENCY` | `4`                     | Parallel Confluence requests per export                         |
+| `CONFLUENCE_RATE_LIMIT`        | `10`                    | Requests per second that **all instances together** may send to Confluence (`0` = unlimited) |
+| `CONFLUENCE_RATE_BURST`        | `20`                    | Requests allowed in a burst above that pace                     |
+| `API_RATE_LIMIT`               | `300`                   | API requests per minute per user, per API instance (`0` = unlimited); above it, `429` with `Retry-After` |
+| `API_RATE_BURST`               | `60`                    | API requests a user may send in a burst                         |
+| `AUTH_RATE_LIMIT`              | `30`                    | Sign-in requests per minute per client address, per API instance (`0` = unlimited) |
 | `EXPORT_RETENTION`             | `48h`                   | How long a document stays downloadable                          |
 | `EXPORT_WORKER_CONCURRENCY`    | `2`                     | Exports generated simultaneously per worker instance            |
 | `EXPORT_MAX_ACTIVE_PER_USER`   | `5`                     | Queued or running exports per user                              |
@@ -195,6 +201,25 @@ Declare a **confidential** client with:
 - redirect URI: `${PUBLIC_URL}/auth/callback`;
 - post-logout redirect URI: `${PUBLIC_URL}/`;
 - scopes: `openid profile email`.
+
+### Rotating the encryption key
+
+`ENCRYPTION_KEYS` holds several keys, newest first: `id:base64, id:base64`. The first encrypts; all of
+them decrypt. Ids are 1–32 letters, digits, `-` or `_`. A single `ENCRYPTION_KEY` is the key ring
+`default:<key>`.
+
+1. Generate a new key and put it in front, keeping the old one (named `default` if it came from
+   `ENCRYPTION_KEY`):
+   ```
+   ENCRYPTION_KEYS=2026-10:<openssl rand -base64 32>, default:<the old key>
+   ```
+2. Deploy. Tokens are re-encrypted with the new key in the background, by the workers' cleanup pass
+   (every `EXPORT_JANITOR_INTERVAL`); each pass is recorded as a `keys.rotate` audit event, and the logs
+   report any token no key can read.
+3. Once a pass reports nothing left to rotate, remove the old key and deploy again.
+
+A token whose key was removed too early is not deleted: its user is asked to enter it again, and putting
+the key back makes it readable.
 
 ### Administrators
 

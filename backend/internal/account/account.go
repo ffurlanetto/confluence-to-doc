@@ -17,6 +17,7 @@ import (
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/confluence"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/crypto"
 	"github.com/ffurlanetto/confluence-to-doc/backend/internal/domain"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/store"
 )
 
 var ErrInvalidPAT = errors.New("the personal access token was rejected by Confluence")
@@ -25,6 +26,8 @@ type Repo interface {
 	GetPreferences(ctx context.Context, userID uuid.UUID) (*domain.Preferences, error)
 	SetPAT(ctx context.Context, userID uuid.UUID, encryptedPAT []byte) error
 	SetDefaultFormat(ctx context.Context, userID uuid.UUID, f domain.Format) error
+	PATsNotUnderKey(ctx context.Context, keyID string, after uuid.UUID, limit int) ([]store.EncryptedPAT, error)
+	ReplacePAT(ctx context.Context, userID uuid.UUID, old, replacement []byte) (bool, error)
 }
 
 type Service struct {
@@ -32,6 +35,7 @@ type Service struct {
 	sealer        *crypto.Sealer
 	confluenceURL *url.URL
 	httpClient    *http.Client
+	limiter       confluence.Limiter
 }
 
 func NewService(repo Repo, sealer *crypto.Sealer, confluenceURL *url.URL, timeout time.Duration) *Service {
@@ -43,6 +47,13 @@ func NewService(repo Repo, sealer *crypto.Sealer, confluenceURL *url.URL, timeou
 		// export's time goes.
 		httpClient: &http.Client{Timeout: timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
+}
+
+// WithLimiter paces every Confluence request made with this service's
+// clients: the deployment-wide budget that protects Confluence.
+func (s *Service) WithLimiter(l confluence.Limiter) *Service {
+	s.limiter = l
+	return s
 }
 
 // ConfluenceURL is the Confluence instance all users connect to. It is fixed
@@ -96,11 +107,61 @@ func (s *Service) Client(ctx context.Context, userID uuid.UUID) (*confluence.Cli
 	}
 	pat, err := s.sealer.Open(p.EncryptedPAT, userID[:])
 	if err != nil {
-		return nil, fmt.Errorf("decrypting PAT: %w", err)
+		return nil, fmt.Errorf("%w: %w", domain.ErrPATUnreadable, err)
 	}
 	return s.newClient(string(pat)), nil
 }
 
+// rotationBatch is how many tokens are read at a time by RotateKeys.
+const rotationBatch = 200
+
+// RotateKeys re-encrypts the stored tokens that were not encrypted with the
+// current key, so an old key can eventually be removed from the ring. It is
+// idempotent and safe on several instances: a row is only replaced if it still
+// holds what was read. It returns the number of tokens re-encrypted and the
+// number left that no key of the ring could open.
+func (s *Service) RotateKeys(ctx context.Context) (rotated, unreadable int, err error) {
+	for after := uuid.Nil; ; {
+		pending, err := s.repo.PATsNotUnderKey(ctx, s.sealer.CurrentKeyID(), after, rotationBatch)
+		if err != nil || len(pending) == 0 {
+			return rotated, unreadable, err
+		}
+		after = pending[len(pending)-1].UserID
+		n, bad, err := s.rotate(ctx, pending)
+		rotated, unreadable = rotated+n, unreadable+bad
+		if err != nil {
+			return rotated, unreadable, err
+		}
+	}
+}
+
+func (s *Service) rotate(ctx context.Context, pending []store.EncryptedPAT) (rotated, unreadable int, err error) {
+	for _, p := range pending {
+		pat, err := s.sealer.Open(p.Encrypted, p.UserID[:])
+		if err != nil {
+			// The key that wrote it left the ring: the user must enter the token
+			// again. Leave the row as it is; Client reports it as unreadable.
+			unreadable++
+			continue
+		}
+		enc, err := s.sealer.Seal(pat, p.UserID[:])
+		if err != nil {
+			return rotated, unreadable, err
+		}
+		ok, err := s.repo.ReplacePAT(ctx, p.UserID, p.Encrypted, enc)
+		if err != nil {
+			return rotated, unreadable, err
+		}
+		if ok {
+			rotated++
+		}
+	}
+	return rotated, unreadable, nil
+}
+
 func (s *Service) newClient(pat string) *confluence.Client {
+	if s.limiter != nil {
+		return confluence.NewClient(s.confluenceURL, pat, s.httpClient, confluence.WithLimiter(s.limiter))
+	}
 	return confluence.NewClient(s.confluenceURL, pat, s.httpClient)
 }

@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +14,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/audit"
+	"github.com/ffurlanetto/confluence-to-doc/backend/internal/auth"
 )
 
 // securityHeaders applies a strict baseline suitable for an SPA served from
@@ -115,3 +120,30 @@ func accessLog(next http.Handler) http.Handler {
 			"request_id", middleware.GetReqID(r.Context()))
 	})
 }
+
+// limitBy refuses requests over the limit with 429 and a Retry-After header.
+// A nil limiter lets everything through.
+func limitBy(l Limiter, key func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if l == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ok, wait := l.Allow(key(r))
+			if !ok {
+				seconds := int(math.Ceil(wait.Seconds()))
+				w.Header().Set("Retry-After", strconv.Itoa(max(seconds, 1)))
+				slog.WarnContext(r.Context(), "rate limit exceeded", "path", r.URL.Path, "retry_after_s", seconds)
+				writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many requests. Slow down and try again shortly.")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// userKey identifies the authenticated user; clientKey the client address
+// (behind trusted proxies, the one they report).
+func userKey(r *http.Request) string { return "user:" + auth.UserFrom(r.Context()).ID.String() }
+
+func clientKey(r *http.Request) string { return "ip:" + audit.RequestFrom(r.Context()).ClientIP }

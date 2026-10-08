@@ -15,6 +15,11 @@ type AuditPurger interface {
 	PurgeAuditEvents(ctx context.Context, keep time.Duration) (int64, error)
 }
 
+// KeyRotator re-encrypts stored secrets with the current key.
+type KeyRotator interface {
+	RotateKeys(ctx context.Context) (rotated, unreadable int, err error)
+}
+
 // historyRetention is how long expired exports stay listed (without file).
 const historyRetention = 30 * 24 * time.Hour
 
@@ -29,6 +34,8 @@ type Janitor struct {
 	audit          Auditor
 	auditPurger    AuditPurger
 	auditRetention time.Duration
+
+	keys KeyRotator
 }
 
 func NewJanitor(repo Repo, blobs storage.BlobStore, interval time.Duration) *Janitor {
@@ -39,6 +46,12 @@ func NewJanitor(repo Repo, blobs storage.BlobStore, interval time.Duration) *Jan
 // older than retention.
 func (j *Janitor) WithAudit(a Auditor, purger AuditPurger, retention time.Duration) *Janitor {
 	j.audit, j.auditPurger, j.auditRetention = a, purger, retention
+	return j
+}
+
+// WithKeyRotation re-encrypts, on every pass, the tokens an older key wrote.
+func (j *Janitor) WithKeyRotation(k KeyRotator) *Janitor {
+	j.keys = k
 	return j
 }
 
@@ -96,6 +109,7 @@ func (j *Janitor) RunOnce(ctx context.Context) int {
 			slog.InfoContext(ctx, "janitor: purged old audit events", "count", n)
 		}
 	}
+	j.rotateKeys(ctx)
 	if n, err := j.repo.DeleteExpiredSessions(ctx); err == nil && n > 0 {
 		slog.InfoContext(ctx, "janitor: deleted expired sessions", "count", n)
 	}
@@ -103,4 +117,25 @@ func (j *Janitor) RunOnce(ctx context.Context) int {
 		slog.InfoContext(ctx, "janitor: expired exports", "count", expired)
 	}
 	return expired
+}
+
+func (j *Janitor) rotateKeys(ctx context.Context) {
+	if j.keys == nil {
+		return
+	}
+	rotated, unreadable, err := j.keys.RotateKeys(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "janitor: re-encrypting tokens", "err", err, "rotated", rotated)
+	}
+	if unreadable > 0 {
+		slog.WarnContext(ctx, "janitor: tokens no key of ENCRYPTION_KEYS can decrypt; their users must enter them again",
+			"count", unreadable)
+	}
+	if rotated > 0 {
+		slog.InfoContext(ctx, "janitor: re-encrypted tokens with the current key", "count", rotated)
+		j.audit.Record(ctx, domain.AuditEvent{
+			Action: audit.ActionKeyRotation, Outcome: domain.AuditSuccess,
+			Details: map[string]any{"rotated": rotated, "unreadable": unreadable},
+		})
+	}
 }

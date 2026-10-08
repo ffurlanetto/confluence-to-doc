@@ -27,9 +27,9 @@ taken with the product owner are recorded here so the lots stay consistent.
    reference" footer; diagonal watermark for marked levels; export id and exporter in the document
    properties. *(ADR 0009, done)*
 3. **Isolation** — NetworkPolicy and seccomp in the chart; no external resource can reach LibreOffice;
-   image scanning in CI; SBOM attached to releases. *(ADR 0010)*
+   image scanning in CI; SBOM attached to releases. *(ADR 0010, done)*
 4. **Keys and load** — `ENCRYPTION_KEYS` key ring with rotation; global Confluence request budget; per-user
-   API rate limit.
+   API rate limit. *(ADR 0011)*
 5. **Lifecycle and GDPR** — periodic session revalidation and back-channel logout; PAT expiry warning;
    inactive account purge; self-service data deletion; processing record; tagged (accessible) PDF.
 6. **Notifications** — email, Teams, in-app.
